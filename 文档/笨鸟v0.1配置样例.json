@@ -1,0 +1,228 @@
+{
+  "version": "SB-v0.1",
+  "domain": "局部场景异常与堆放理解",
+  "limits": {
+    "max_input_sentences": 3,
+    "max_input_chars": 60,
+    "max_spaces_per_signal": 5,
+    "max_propagation_targets": 3,
+    "max_depth": 4,
+    "max_hypotheses": 10,
+    "output_hypotheses": 3
+  },
+  "thresholds": {
+    "activation": 0.55,
+    "propagation": 0.30,
+    "competitive_gap_notice": 0.08
+  },
+  "depth_decay": {
+    "1": 1.0,
+    "2": 0.8,
+    "3": 0.6,
+    "4": 0.45
+  },
+  "weights": {
+    "local_activation": {
+      "type_match": 0.35,
+      "content_similarity": 0.35,
+      "context_compatibility": 0.20,
+      "transition_prior": 0.10
+    },
+    "global_hypothesis": {
+      "object_support": 0.22,
+      "attribute_consistency": 0.18,
+      "relation_consistency": 0.20,
+      "scene_compatibility": 0.22,
+      "event_plausibility": 0.18,
+      "conflict_penalty": 0.10,
+      "mutual_exclusion_penalty": 0.06,
+      "complexity_penalty": 0.04
+    }
+  },
+  "object_lexicon": {
+    "杯子": ["水杯", "玻璃杯"],
+    "桶": ["水桶", "塑料桶"],
+    "袋子": ["塑料袋", "垃圾袋"],
+    "砖块": ["砖", "碎砖", "砖头"],
+    "木板": ["板材", "破木板"],
+    "纸箱": ["旧纸箱"],
+    "生活杂物": ["杂物"],
+    "垃圾桶": ["垃圾箱"],
+    "空地": ["空场地"],
+    "地面": ["地上"],
+    "沟渠": ["水沟", "排水沟"],
+    "院子": ["院角", "院子角落"],
+    "门口": [],
+    "道路": ["路边"],
+    "杂草": [],
+    "房屋": ["居民房"],
+    "小卡车": ["卡车", "货车"],
+    "桌子": ["桌面", "桌边"],
+    "水": ["积水"],
+    "猫": ["小猫"]
+  },
+  "attribute_lexicon": {
+    "红色": ["红"],
+    "发黑": ["黑色", "变黑"],
+    "破碎": ["碎裂", "碎"],
+    "散乱": ["杂乱", "不整齐"],
+    "裸露": ["露出", "无覆盖"],
+    "翻倒": ["倒下", "倾倒"],
+    "污染": ["脏污", "污浊"],
+    "堆积": ["堆着", "堆放"],
+    "稳定": ["立着", "摆正"]
+  },
+  "relation_patterns": [
+    {
+      "pattern": "X上有Y",
+      "relation": "在……上",
+      "source": "Y",
+      "target": "X"
+    },
+    {
+      "pattern": "Y在X上",
+      "relation": "在……上",
+      "source": "Y",
+      "target": "X"
+    },
+    {
+      "pattern": "X旁边有Y",
+      "relation": "在……旁边",
+      "source": "Y",
+      "target": "X"
+    },
+    {
+      "pattern": "Y在X旁边",
+      "relation": "在……旁边",
+      "source": "Y",
+      "target": "X"
+    },
+    {
+      "pattern": "X里有Y",
+      "relation": "在……里面",
+      "source": "Y",
+      "target": "X"
+    },
+    {
+      "pattern": "Y靠近X",
+      "relation": "靠近",
+      "source": "Y",
+      "target": "X"
+    }
+  ],
+  "event_patterns": [
+    {
+      "pattern": "X碰到了Y",
+      "event": "撞击",
+      "actor": "X",
+      "target": "Y"
+    },
+    {
+      "pattern": "X翻倒了",
+      "event": "翻倒",
+      "actor": "X",
+      "target": null
+    },
+    {
+      "pattern": "X被碰倒",
+      "event": "翻倒",
+      "actor": "unknown",
+      "target": "X"
+    },
+    {
+      "pattern": "Y洒在X上",
+      "event": "泄漏",
+      "actor": "Y",
+      "target": "X"
+    },
+    {
+      "pattern": "X堆着Y",
+      "event": "堆放",
+      "actor": "unknown",
+      "target": "Y"
+    }
+  ],
+  "scene_spaces": [
+    {
+      "label": "建筑废弃物堆放",
+      "support_objects": ["砖块", "木板", "小卡车", "空地", "地面"],
+      "support_attributes": ["破碎", "散乱", "裸露", "堆积"],
+      "support_relations": ["在……上", "在……旁边", "堆放于"],
+      "support_events": ["堆放", "散落"],
+      "reject_signals": ["整齐", "餐具", "室内摆放"],
+      "base_score": 0.55
+    },
+    {
+      "label": "生活杂物堆放",
+      "support_objects": ["袋子", "垃圾桶", "纸箱", "生活杂物", "院子", "门口"],
+      "support_attributes": ["散乱", "堆积", "翻倒"],
+      "support_relations": ["在……旁边", "堆放于"],
+      "support_events": ["堆放", "翻倒"],
+      "reject_signals": ["施工车辆", "砖块"],
+      "base_score": 0.50
+    },
+    {
+      "label": "污染/异常积水",
+      "support_objects": ["沟渠", "水", "房屋", "杂草", "道路"],
+      "support_attributes": ["发黑", "污染", "杂草"],
+      "support_relations": ["靠近", "在……里面"],
+      "support_events": ["泄漏", "覆盖"],
+      "reject_signals": ["干净", "整齐"],
+      "base_score": 0.52
+    },
+    {
+      "label": "普通物体摆放",
+      "support_objects": ["杯子", "桌子", "桶"],
+      "support_attributes": ["稳定", "整齐"],
+      "support_relations": ["在……上", "在……里面", "在……旁边"],
+      "support_events": [],
+      "reject_signals": ["翻倒", "散落", "污染"],
+      "base_score": 0.45
+    },
+    {
+      "label": "临时施工场景",
+      "support_objects": ["砖块", "木板", "小卡车", "空地", "地面"],
+      "support_attributes": ["裸露", "堆积", "散乱"],
+      "support_relations": ["在……上", "邻近"],
+      "support_events": ["堆放"],
+      "reject_signals": ["餐具", "室内"],
+      "base_score": 0.48
+    },
+    {
+      "label": "倾倒/翻倒事件场景",
+      "support_objects": ["杯子", "垃圾桶", "水"],
+      "support_attributes": ["翻倒", "散乱"],
+      "support_relations": ["在……上", "散落于", "覆盖"],
+      "support_events": ["撞击", "翻倒", "泄漏", "散落"],
+      "reject_signals": ["整齐", "稳定"],
+      "base_score": 0.53
+    }
+  ],
+  "mutual_exclusion": [
+    ["普通物体摆放", "倾倒/翻倒事件场景"],
+    ["普通物体摆放", "建筑废弃物堆放"],
+    ["普通物体摆放", "污染/异常积水"]
+  ],
+  "state_update_rules": [
+    {
+      "event": "撞击",
+      "effect": "提高目标不稳定性"
+    },
+    {
+      "event": "翻倒",
+      "effect": "目标稳定性变为翻倒"
+    },
+    {
+      "event": "泄漏",
+      "effect": "液体与目标表面建立覆盖关系"
+    },
+    {
+      "event": "堆放",
+      "effect": "目标增加堆积属性并绑定位置"
+    },
+    {
+      "event": "散落",
+      "effect": "目标增加散乱属性并绑定位置"
+    }
+  ]
+}

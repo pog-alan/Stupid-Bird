@@ -1,0 +1,55 @@
+{
+  "crawler": {
+    "max_pages": 200,
+    "timeout_seconds": 10,
+    "allow_robots": true,
+    "allow_redirects": true,
+    "accepted_mime_prefixes": ["text/", "application/json"]
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8088
+  },
+  "refresh_seconds": 1800,
+  "crawl_interval_seconds": 3600,
+  "sources": [
+    {
+      "name": "local-government",
+      "seed_urls": ["https://example.gov/notice/"],
+      "allowed_domains": ["example.gov"],
+      "max_depth": 1,
+      "rate_limit_seconds": 1.5,
+      "user_agent": "SB-V01-Crawler/0.1"
+    }
+  ],
+  "quality_gate": {
+    "promote_to_candidate": 0.85,
+    "promote_to_temporary": 0.70,
+    "min_sources_for_stable": 3,
+    "conflict_penalty": 0.15
+  },
+  "knowledge_store": {
+    "path": "文档/笨鸟v0.1采集知识库.json",
+    "base_config_path": "文档/笨鸟v0.1配置样例.json",
+    "online_config_path": "文档/笨鸟v0.1配置在线.json"
+  },
+  "proactive": {
+    "template_path": "文档/笨鸟v0.1主动提问模板.json"
+  },
+  "embedding_backend": {
+    "type": "hashed",
+    "dimensions": 192,
+    "fallback_to_hash": true,
+    "endpoint": "http://127.0.0.1:8001/embeddings",
+    "timeout_seconds": 15,
+    "input_key": "texts",
+    "model": "",
+    "api_key": "",
+    "model_name": "BAAI/bge-small-zh-v1.5"
+  },
+  "vector_retrieval": {
+    "enabled": true,
+    "top_k": 6,
+    "min_score": 0.2
+  }
+}

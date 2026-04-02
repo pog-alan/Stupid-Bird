@@ -1,0 +1,20 @@
+{
+  "embedding_backend": {
+    "type": "sentence_transformers",
+    "preset": "bge-small-zh-v1.5",
+    "model_name": "BAAI/bge-small-zh-v1.5",
+    "batch_size": 32,
+    "normalize_embeddings": true,
+    "device": "",
+    "cache_folder": "",
+    "trust_remote_code": false,
+    "query_instruction": "为这个句子生成表示以用于检索相关文章：",
+    "passage_instruction": "",
+    "fallback_to_hash": true
+  },
+  "vector_retrieval": {
+    "enabled": true,
+    "top_k": 6,
+    "min_score": 0.2
+  }
+}
