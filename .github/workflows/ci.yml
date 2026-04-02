@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Compile Sources
+        run: python -m compileall sb examples
+
+      - name: Run Minimal Demo
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m examples.minimal_demo
+
+      - name: Run V0.1 Demo
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m examples.v01_demo
+
+      - name: Run Vector Demo
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m examples.v01_vector_demo
+
+      - name: Run Vector Sync Demo
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m examples.v01_vector_sync_demo
+
+      - name: Run Embedding Backend Demo
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m examples.v01_embedding_backend_demo
