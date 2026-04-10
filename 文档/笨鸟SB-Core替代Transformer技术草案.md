@@ -1,5 +1,7 @@
 # 笨鸟 SB-Core 替代 Transformer 技术草案
 
+对应当前原型的实验性论文草稿见 [笨鸟SB-Core长上下文实验论文草稿.md](d:/SB/文档/笨鸟SB-Core长上下文实验论文草稿.md)。
+
 ## 1. 目标定义
 
 `SB-Core` 的目标不是在应用层“辅助”Transformer，而是在语言模型主干层替代它。
