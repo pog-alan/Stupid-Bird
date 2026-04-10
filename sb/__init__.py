@@ -9,15 +9,6 @@ from .embedding_backends import (
     create_embedding_encoder,
     resolve_embedding_backend_config,
 )
-from .core_lm_data import (
-    ToySequenceBatch,
-    ToyTaskVocab,
-    decode_tokens,
-    sample_copy_batch,
-    sample_needle_in_haystack_batch,
-    sample_passkey_batch,
-)
-from .core_lm_torch import SBCoreMiniLM, SBCoreMiniTorchConfig, next_token_loss
 from .extractor import ExtractedCandidate, SimpleExtractor
 from .ingest import Ingestor, KnowledgeStore, apply_stable_entries_to_config
 from .llm_bridge import build_llm_context, retrieve_for_llm
@@ -40,9 +31,25 @@ from .rag_store import DocumentChunk, RAGKnowledgeBase, SourceDocument
 from .reasoner import SBV01Engine
 from .router import RouterConfig, RoutingDecision, SparseRouterSpec
 from .server import run_server
-from .transformer_baseline import TinyTransformerConfig, TinyTransformerLM
 from .train_lm import ExperimentStage, LossWeights, SBCoreTrainingPlan, TrainLMConfig
 from .vector_memory import HashedVectorEncoder, MemoryRecord, VectorHit, VectorMemoryIndex
+
+_TORCH_AVAILABLE = True
+try:
+    from .core_lm_data import (
+        ToySequenceBatch,
+        ToyTaskVocab,
+        decode_tokens,
+        sample_copy_batch,
+        sample_needle_in_haystack_batch,
+        sample_passkey_batch,
+    )
+    from .core_lm_torch import SBCoreMiniLM, SBCoreMiniTorchConfig, next_token_loss
+    from .transformer_baseline import TinyTransformerConfig, TinyTransformerLM
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    _TORCH_AVAILABLE = False
 
 __all__ = [
     "CandidateDecision",
@@ -80,8 +87,6 @@ __all__ = [
     "SBLLMRuntime",
     "SBLLMRuntimeConfig",
     "SBCoreConfig",
-    "SBCoreMiniLM",
-    "SBCoreMiniTorchConfig",
     "SBCoreModelSpec",
     "SBCoreTrainingPlan",
     "SBRAGConfig",
@@ -99,9 +104,6 @@ __all__ = [
     "SparseRouterSpec",
     "TrainLMConfig",
     "TransformRule",
-    "TinyTransformerConfig",
-    "TinyTransformerLM",
-    "ToySequenceBatch",
     "VectorHit",
     "VectorMemoryIndex",
     "append_questions_to_payload",
@@ -110,16 +112,27 @@ __all__ = [
     "build_llm_context",
     "create_embedding_encoder",
     "create_llm_client",
-    "decode_tokens",
     "load_default_ontology",
     "load_llm_config",
-    "next_token_loss",
     "propose_questions",
     "resolve_embedding_backend_config",
     "retrieve_for_llm",
     "run_server",
-    "sample_copy_batch",
-    "sample_needle_in_haystack_batch",
-    "sample_passkey_batch",
-    "ToyTaskVocab",
 ]
+
+if _TORCH_AVAILABLE:
+    __all__.extend(
+        [
+            "SBCoreMiniLM",
+            "SBCoreMiniTorchConfig",
+            "TinyTransformerConfig",
+            "TinyTransformerLM",
+            "ToySequenceBatch",
+            "ToyTaskVocab",
+            "decode_tokens",
+            "next_token_loss",
+            "sample_copy_batch",
+            "sample_needle_in_haystack_batch",
+            "sample_passkey_batch",
+        ]
+    )
