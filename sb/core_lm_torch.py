@@ -21,6 +21,10 @@ class SBCoreMiniTorchConfig:
     tie_weights: bool = False
     pad_token_id: int = 0
     max_seq_len: int = 256
+    working_protection_decay: float = 0.96
+    working_usage_decay: float = 0.92
+    working_age_increment: float = 0.05
+    working_memory_temperature: float = 0.35
     use_attention: bool = False
     use_kv_cache: bool = False
 
@@ -33,6 +37,14 @@ class SBCoreMiniTorchConfig:
             raise ValueError("router_top_k 必须大于 0。")
         if self.semantic_memory_slots <= 0 or self.working_memory_slots <= 0:
             raise ValueError("memory slots 必须大于 0。")
+        if not 0.0 < self.working_protection_decay <= 1.0:
+            raise ValueError("working_protection_decay 必须在 (0, 1] 之间。")
+        if not 0.0 < self.working_usage_decay <= 1.0:
+            raise ValueError("working_usage_decay 必须在 (0, 1] 之间。")
+        if not 0.0 <= self.working_age_increment <= 1.0:
+            raise ValueError("working_age_increment 必须在 [0, 1] 之间。")
+        if self.working_memory_temperature <= 0.0:
+            raise ValueError("working_memory_temperature 必须大于 0。")
 
 
 class SBRecurrentCell(nn.Module):
@@ -97,48 +109,138 @@ class SBMemoryRouter(nn.Module):
 
 
 class SBMemoryWriter(nn.Module):
-    def __init__(self, state_dim: int, working_slots: int) -> None:
+    def __init__(
+        self,
+        state_dim: int,
+        working_slots: int,
+        *,
+        protection_decay: float,
+        temperature: float,
+    ) -> None:
         super().__init__()
         self.working_slots = working_slots
+        self.protection_decay = protection_decay
+        self.temperature = temperature
         self.key_proj = nn.Linear(state_dim, state_dim)
         self.value_proj = nn.Linear(state_dim, state_dim)
         self.write_gate = nn.Linear(state_dim, 1)
+        self.merge_gate = nn.Linear(state_dim, 1)
+        self.binding_gate = nn.Linear(state_dim, 1)
+        self.importance_gate = nn.Linear(state_dim, 1)
+        self.slot_occupancy = nn.Linear(state_dim, 1)
+        self.slot_protection = nn.Linear(state_dim, 1)
 
     def forward(
         self,
         hidden: Tensor,
         working_keys: Tensor,
         working_values: Tensor,
-        step: int,
-    ) -> Tuple[Tensor, Tensor, Tensor]:
-        batch_size, _, state_dim = working_keys.shape
-        slot_index = step % self.working_slots
-        slot_mask = F.one_hot(
-            torch.full((batch_size,), slot_index, device=hidden.device, dtype=torch.long),
-            num_classes=self.working_slots,
-        ).to(hidden.dtype).unsqueeze(-1)
+        working_protection: Tensor,
+        working_usage: Tensor,
+        working_age: Tensor,
+    ) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Tensor]]:
+        candidate_key = torch.tanh(self.key_proj(hidden))
+        candidate_value = torch.tanh(self.value_proj(hidden))
+        write_strength = torch.sigmoid(self.write_gate(hidden))
+        importance = torch.sigmoid(self.importance_gate(hidden))
 
-        gate = torch.sigmoid(self.write_gate(hidden)).unsqueeze(-1)
-        new_key = torch.tanh(self.key_proj(hidden)).unsqueeze(1)
-        new_value = torch.tanh(self.value_proj(hidden)).unsqueeze(1)
+        norm_candidate = F.normalize(candidate_key, dim=-1, eps=1e-6)
+        norm_keys = F.normalize(working_keys, dim=-1, eps=1e-6)
+        similarity = torch.einsum("bd,bnd->bn", norm_candidate, norm_keys)
 
-        current_key = torch.sum(working_keys * slot_mask, dim=1, keepdim=True)
-        current_value = torch.sum(working_values * slot_mask, dim=1, keepdim=True)
+        norm_occupancy = torch.clamp(working_values.norm(dim=-1) / (working_values.shape[-1] ** 0.5), 0.0, 1.0)
+        learned_occupancy = torch.sigmoid(self.slot_occupancy(working_values)).squeeze(-1)
+        occupancy = torch.clamp(0.5 * learned_occupancy + 0.5 * norm_occupancy, 0.0, 1.0)
+        learned_protection = torch.sigmoid(self.slot_protection(working_values)).squeeze(-1)
+        effective_protection = torch.clamp(0.4 * learned_protection + 0.6 * working_protection, 0.0, 1.0)
+        effective_usage = torch.clamp(0.5 * occupancy + 0.5 * working_usage, 0.0, 1.0)
+        effective_age = torch.clamp(working_age, 0.0, 1.0)
 
-        blended_key = current_key * (1.0 - gate) + new_key * gate
-        blended_value = current_value * (1.0 - gate) + new_value * gate
+        merge_weights = F.softmax(similarity / self.temperature, dim=-1)
+        replace_scores = (
+            1.15 * (1.0 - occupancy)
+            + 0.85 * (1.0 - effective_protection)
+            + 0.65 * effective_age
+            + 0.45 * (1.0 - effective_usage)
+            + 0.25 * (1.0 - similarity)
+        )
+        replace_weights = F.softmax(replace_scores / self.temperature, dim=-1)
 
-        updated_keys = working_keys * (1.0 - slot_mask) + blended_key * slot_mask
-        updated_values = working_values * (1.0 - slot_mask) + blended_value * slot_mask
-        return updated_keys, updated_values, gate.squeeze(-1).squeeze(-1)
+        merge_index = merge_weights.argmax(dim=-1)
+        replace_index = replace_weights.argmax(dim=-1)
+        max_similarity = similarity.gather(1, merge_index.unsqueeze(-1))
+        matched_occupancy = occupancy.gather(1, merge_index.unsqueeze(-1))
+        matched_usage = effective_usage.gather(1, merge_index.unsqueeze(-1))
+        matched_age = effective_age.gather(1, merge_index.unsqueeze(-1))
+        merge_preference = torch.sigmoid(
+            self.merge_gate(hidden)
+            + 2.4 * max_similarity
+            + 1.6 * (matched_occupancy - 0.5)
+            + 1.0 * (matched_usage - 0.5)
+            - 0.8 * matched_age
+        )
+        merge_candidate = ((max_similarity > 0.55) & (matched_occupancy > 0.35)).squeeze(-1)
+        use_merge = ((merge_preference.squeeze(-1) >= 0.5) & merge_candidate).long()
+        target_index = torch.where(use_merge.bool(), merge_index, replace_index)
+        target_weights = F.one_hot(target_index, num_classes=working_keys.shape[1]).to(hidden.dtype)
+        binding_strength = torch.sigmoid(self.binding_gate(hidden) + 2.2 * max_similarity)
+
+        conflict = torch.clamp(1.0 - similarity, 0.0, 1.0)
+        overwrite = (0.15 + 0.85 * write_strength) * target_weights * (1.0 - 0.65 * effective_protection * conflict)
+        overwrite = overwrite.unsqueeze(-1)
+
+        key_mix = torch.where(
+            use_merge.unsqueeze(-1).bool(),
+            0.22 + 0.38 * binding_strength,
+            0.78 + 0.18 * binding_strength,
+        ).unsqueeze(-1)
+        value_mix = torch.where(
+            use_merge.unsqueeze(-1).bool(),
+            0.45 + 0.35 * importance,
+            0.75 + 0.20 * importance,
+        ).unsqueeze(-1)
+
+        updated_keys = working_keys + overwrite * key_mix * (candidate_key.unsqueeze(1) - working_keys)
+        updated_values = working_values + overwrite * value_mix * (candidate_value.unsqueeze(1) - working_values)
+
+        protection_boost = overwrite.squeeze(-1) * (0.5 + 0.5 * importance)
+        updated_protection = torch.clamp(
+            working_protection * self.protection_decay + protection_boost,
+            0.0,
+            1.0,
+        )
+
+        stats = {
+            "write_strength": write_strength.squeeze(-1),
+            "merge_preference": merge_preference.squeeze(-1),
+            "binding_strength": binding_strength.squeeze(-1),
+            "overwrite_ratio": overwrite.squeeze(-1).mean(dim=-1),
+            "protection_mean": updated_protection.mean(dim=-1),
+            "max_similarity": max_similarity.squeeze(-1),
+            "slot_write_mass": overwrite.squeeze(-1),
+        }
+        return updated_keys, updated_values, updated_protection, stats
 
 
 class SBMiniLayer(nn.Module):
-    def __init__(self, state_dim: int, working_slots: int, top_k: int) -> None:
+    def __init__(
+        self,
+        state_dim: int,
+        working_slots: int,
+        top_k: int,
+        *,
+        protection_decay: float,
+        temperature: float,
+    ) -> None:
         super().__init__()
         self.router = SBMemoryRouter(state_dim=state_dim, top_k=top_k)
         self.cell = SBRecurrentCell(state_dim=state_dim)
-        self.writer = SBMemoryWriter(state_dim=state_dim, working_slots=working_slots)
+        self.writer = SBMemoryWriter(
+            state_dim=state_dim,
+            working_slots=working_slots,
+            protection_decay=protection_decay,
+            temperature=temperature,
+        )
 
 
 class SBCoreMiniLM(nn.Module):
@@ -155,6 +257,8 @@ class SBCoreMiniLM(nn.Module):
                     state_dim=config.state_dim,
                     working_slots=config.working_memory_slots,
                     top_k=config.router_top_k,
+                    protection_decay=config.working_protection_decay,
+                    temperature=config.working_memory_temperature,
                 )
                 for _ in range(config.num_layers)
             ]
@@ -189,11 +293,29 @@ class SBCoreMiniLM(nn.Module):
             torch.zeros(batch_size, self.config.working_memory_slots, self.config.state_dim, device=device)
             for _ in range(self.config.num_layers)
         ]
+        working_protection = [
+            torch.zeros(batch_size, self.config.working_memory_slots, device=device)
+            for _ in range(self.config.num_layers)
+        ]
+        working_usage = [
+            torch.zeros(batch_size, self.config.working_memory_slots, device=device)
+            for _ in range(self.config.num_layers)
+        ]
+        working_age = [
+            torch.zeros(batch_size, self.config.working_memory_slots, device=device)
+            for _ in range(self.config.num_layers)
+        ]
 
         outputs: List[Tensor] = []
         route_entropy = x.new_tensor(0.0)
         working_ratio = x.new_tensor(0.0)
         write_gate_mean = x.new_tensor(0.0)
+        merge_preference_mean = x.new_tensor(0.0)
+        binding_strength_mean = x.new_tensor(0.0)
+        overwrite_ratio_mean = x.new_tensor(0.0)
+        protection_mean = x.new_tensor(0.0)
+        usage_mean = x.new_tensor(0.0)
+        age_mean = x.new_tensor(0.0)
         total_steps = 0
 
         for step in range(seq_len):
@@ -208,17 +330,53 @@ class SBCoreMiniLM(nn.Module):
                     semantic_values=self.semantic_values[layer_index],
                 )
                 hidden[layer_index] = layer.cell(current, hidden[layer_index], memory_read)
-                working_keys[layer_index], working_values[layer_index], gate = layer.writer(
+                (
+                    working_keys[layer_index],
+                    working_values[layer_index],
+                    working_protection[layer_index],
+                    writer_stats,
+                ) = layer.writer(
                     hidden[layer_index],
                     working_keys[layer_index],
                     working_values[layer_index],
-                    step=step,
+                    working_protection[layer_index],
+                    working_usage[layer_index],
+                    working_age[layer_index],
                 )
+                read_weights = torch.zeros_like(working_usage[layer_index])
+                working_mask = route["top_indices"] < self.config.working_memory_slots
+                if working_mask.any():
+                    safe_indices = route["top_indices"].masked_fill(~working_mask, 0)
+                    read_weights.scatter_add_(
+                        1,
+                        safe_indices,
+                        route["weights"] * working_mask.to(route["weights"].dtype),
+                    )
+                slot_write_mass = writer_stats["slot_write_mass"].detach()
+                working_usage[layer_index] = torch.clamp(
+                    working_usage[layer_index] * self.config.working_usage_decay
+                    + 0.7 * read_weights.detach()
+                    + 0.9 * slot_write_mass,
+                    0.0,
+                    1.0,
+                ).detach()
+                working_age[layer_index] = torch.clamp(
+                    (working_age[layer_index] + self.config.working_age_increment) * (1.0 - slot_write_mass),
+                    0.0,
+                    1.0,
+                ).detach()
+                working_protection[layer_index] = working_protection[layer_index].detach()
                 current = hidden[layer_index]
                 weights = route["weights"]
                 route_entropy = route_entropy + (-(weights * torch.log(weights + 1e-8)).sum(dim=-1).mean())
                 working_ratio = working_ratio + route["working_ratio"]
-                write_gate_mean = write_gate_mean + gate.mean()
+                write_gate_mean = write_gate_mean + writer_stats["write_strength"].mean()
+                merge_preference_mean = merge_preference_mean + writer_stats["merge_preference"].mean()
+                binding_strength_mean = binding_strength_mean + writer_stats["binding_strength"].mean()
+                overwrite_ratio_mean = overwrite_ratio_mean + writer_stats["overwrite_ratio"].mean()
+                protection_mean = protection_mean + writer_stats["protection_mean"].mean()
+                usage_mean = usage_mean + working_usage[layer_index].mean()
+                age_mean = age_mean + working_age[layer_index].mean()
                 total_steps += 1
             outputs.append(self.final_norm(self.dropout(current)))
 
@@ -229,6 +387,12 @@ class SBCoreMiniLM(nn.Module):
             "route_entropy": float((route_entropy / max(total_steps, 1)).detach().cpu()),
             "working_read_ratio": float((working_ratio / max(total_steps, 1)).detach().cpu()),
             "write_gate_mean": float((write_gate_mean / max(total_steps, 1)).detach().cpu()),
+            "merge_preference_mean": float((merge_preference_mean / max(total_steps, 1)).detach().cpu()),
+            "binding_strength_mean": float((binding_strength_mean / max(total_steps, 1)).detach().cpu()),
+            "overwrite_ratio_mean": float((overwrite_ratio_mean / max(total_steps, 1)).detach().cpu()),
+            "protection_mean": float((protection_mean / max(total_steps, 1)).detach().cpu()),
+            "usage_mean": float((usage_mean / max(total_steps, 1)).detach().cpu()),
+            "age_mean": float((age_mean / max(total_steps, 1)).detach().cpu()),
             "avg_active_slots": float(self.config.router_top_k),
         }
         if not return_aux:
