@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping
 
 from .v01_types import AnalysisResult
 
@@ -16,22 +16,33 @@ class ProactiveQuestion:
 
 
 def propose_questions(
-    result: AnalysisResult,
+    result: AnalysisResult | Mapping[str, object],
     template_path: str | Path | None = None,
 ) -> List[ProactiveQuestion]:
     templates = _load_templates(template_path)
     questions: List[ProactiveQuestion] = []
-    if result.best_hypothesis is None:
+
+    best_hypothesis = _field(result, "best_hypothesis")
+    scene_hypotheses = list(_field(result, "scene_hypotheses", []))
+    objects = list(_field(result, "objects", []))
+    attributes = list(_field(result, "attributes", []))
+    relations = list(_field(result, "relations", []))
+    events = list(_field(result, "events", []))
+
+    if best_hypothesis is None:
         return [
             ProactiveQuestion(
                 _choose(templates["missing_objects"]),
-                "缺乏场景核心对象",
+                "缺少场景核心对象",
                 1,
             )
         ]
 
-    if len(result.scene_hypotheses) >= 2:
-        gap = abs(result.scene_hypotheses[0].score - result.scene_hypotheses[1].score)
+    if len(scene_hypotheses) >= 2:
+        gap = abs(
+            float(_field(scene_hypotheses[0], "score", 0.0))
+            - float(_field(scene_hypotheses[1], "score", 0.0))
+        )
         if gap < 0.08:
             questions.append(
                 ProactiveQuestion(
@@ -41,7 +52,7 @@ def propose_questions(
                 )
             )
 
-    if not result.objects:
+    if not objects:
         questions.append(
             ProactiveQuestion(
                 _choose(templates["missing_objects"]),
@@ -49,7 +60,7 @@ def propose_questions(
                 1,
             )
         )
-    elif not result.attributes:
+    elif not attributes:
         questions.append(
             ProactiveQuestion(
                 _choose(templates["missing_attributes"]),
@@ -58,7 +69,7 @@ def propose_questions(
             )
         )
 
-    if not result.relations:
+    if not relations:
         questions.append(
             ProactiveQuestion(
                 _choose(templates["missing_relations"]),
@@ -67,7 +78,7 @@ def propose_questions(
             )
         )
 
-    if not result.events:
+    if not events:
         questions.append(
             ProactiveQuestion(
                 _choose(templates["missing_events"]),
@@ -80,8 +91,12 @@ def propose_questions(
     return questions
 
 
-def append_questions_to_payload(payload: Dict[str, object], result: AnalysisResult) -> Dict[str, object]:
-    questions = propose_questions(result)
+def append_questions_to_payload(
+    payload: Dict[str, object],
+    result: AnalysisResult | Mapping[str, object],
+    template_path: str | Path | None = None,
+) -> Dict[str, object]:
+    questions = propose_questions(result, template_path)
     payload["proactive_questions"] = [
         {"question": item.question, "reason": item.reason, "priority": item.priority}
         for item in questions[:2]
@@ -95,11 +110,11 @@ def _choose(options: List[str]) -> str:
 
 def _load_templates(template_path: str | Path | None) -> Dict[str, List[str]]:
     defaults = {
-        "scene_competitive": ["这个场景更像是异常堆放还是正常摆放？"],
+        "scene_competitive": ["这个场景更像异常堆放还是正常摆放？"],
         "missing_objects": ["能补充一下场景里最关键的对象是什么吗？"],
-        "missing_attributes": ["这些物体有没有明显的状态或特征（例如散乱、破碎、翻倒）？"],
-        "missing_relations": ["这些物体之间有位置关系吗（比如在上面、旁边、里面）？"],
-        "missing_events": ["这个场景里有没有发生动作或变化（比如碰倒、散落、泄漏）？"],
+        "missing_attributes": ["这些物体有没有明显的状态或特征，比如散乱、破碎、翻倒？"],
+        "missing_relations": ["这些物体之间有位置关系吗，比如在上面、旁边、里面？"],
+        "missing_events": ["这个场景里有没有发生动作或变化，比如碰倒、散落、泄漏？"],
     }
     if template_path is None:
         template_path = Path(__file__).resolve().parents[1] / "文档" / "笨鸟v0.1主动提问模板.json"
@@ -114,3 +129,9 @@ def _load_templates(template_path: str | Path | None) -> Dict[str, List[str]]:
         if key not in raw or not isinstance(raw[key], list) or not raw[key]:
             raw[key] = fallback
     return raw
+
+
+def _field(source: AnalysisResult | Mapping[str, object] | object, name: str, default: object = None) -> object:
+    if isinstance(source, Mapping):
+        return source.get(name, default)
+    return getattr(source, name, default)

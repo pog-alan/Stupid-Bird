@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 
 @dataclass
@@ -52,6 +52,25 @@ class DialogStore:
         recent = [turn.text for turn in state.turns[-max_turns:]]
         recent.append(new_text)
         return "。".join(item.strip("。") for item in recent if item)
+
+    def recent_turns(self, session_id: str, max_turns: int = 4) -> List[DialogTurn]:
+        state = self.get(session_id)
+        return list(state.turns[-max_turns:])
+
+    def build_history_summary(
+        self,
+        session_id: str,
+        max_turns: int = 4,
+        max_chars: int = 400,
+    ) -> str:
+        turns = self.recent_turns(session_id, max_turns=max_turns)
+        if not turns:
+            return ""
+        parts = [f"第{index}轮：{turn.text}" for index, turn in enumerate(turns, start=1)]
+        summary = "；".join(parts)
+        if len(summary) <= max_chars:
+            return summary
+        return summary[: max_chars - 1] + "…"
 
 
 def _now() -> str:

@@ -86,9 +86,22 @@ class SBV01Engine:
             for hit in hits
         ]
 
-    def build_llm_payload(self, text: str, analysis: Dict[str, object], top_k: int = 6) -> Dict[str, object]:
+    def build_llm_payload(
+        self,
+        text: str,
+        analysis: Dict[str, object],
+        top_k: int = 6,
+        dialog_state: Dict[str, object] | None = None,
+        history_summary: str = "",
+    ) -> Dict[str, object]:
         hits = retrieve_for_llm(self.vector_index, text, analysis, top_k=top_k)
-        return build_llm_context(text, analysis, hits)
+        return build_llm_context(
+            text,
+            analysis,
+            hits,
+            dialog_state=dialog_state,
+            history_summary=history_summary,
+        )
 
     def _merge_entities(self, parsed: ParsedScene) -> None:
         canonical_by_label = {}

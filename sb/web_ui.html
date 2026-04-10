@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>笨鸟 SB-RAG 控制台</title>
+  <style>
+    :root {
+      --bg: #f3efe4;
+      --bg-2: #e7dcc6;
+      --panel: rgba(255, 250, 240, 0.9);
+      --panel-strong: #fff8eb;
+      --line: rgba(74, 58, 36, 0.12);
+      --text: #2f2618;
+      --muted: #6b5b45;
+      --accent: #0f766e;
+      --accent-2: #b45309;
+      --accent-soft: rgba(15, 118, 110, 0.12);
+      --danger: #b91c1c;
+      --shadow: 0 24px 80px rgba(73, 52, 22, 0.12);
+      --radius: 22px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.15), transparent 28%),
+        radial-gradient(circle at top right, rgba(180, 83, 9, 0.12), transparent 24%),
+        linear-gradient(180deg, var(--bg), var(--bg-2));
+      min-height: 100vh;
+    }
+
+    .shell {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.3fr 0.9fr;
+      gap: 18px;
+      margin-bottom: 20px;
+    }
+
+    .hero-card,
+    .panel {
+      background: var(--panel);
+      backdrop-filter: blur(18px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .hero-card {
+      padding: 24px 26px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px -40px auto;
+      width: 180px;
+      height: 180px;
+      background: radial-gradient(circle, rgba(15, 118, 110, 0.18), transparent 70%);
+      pointer-events: none;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 4vw, 46px);
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+      max-width: 760px;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 18px;
+    }
+
+    .status-item {
+      background: rgba(255, 255, 255, 0.55);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px 16px;
+    }
+
+    .status-item .label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .status-item .value {
+      font-size: 15px;
+      font-weight: 700;
+      word-break: break-all;
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 420px minmax(0, 1fr);
+      gap: 20px;
+    }
+
+    .panel {
+      padding: 18px;
+    }
+
+    .panel h2,
+    .panel h3 {
+      margin: 0 0 12px;
+      letter-spacing: -0.03em;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    label {
+      display: grid;
+      gap: 8px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border-radius: 16px;
+      border: 1px solid rgba(68, 53, 31, 0.16);
+      background: rgba(255, 255, 255, 0.88);
+      padding: 13px 14px;
+      color: var(--text);
+      outline: none;
+      transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: rgba(15, 118, 110, 0.55);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+    }
+
+    textarea {
+      min-height: 132px;
+      resize: vertical;
+      line-height: 1.65;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      cursor: pointer;
+      transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+      font-weight: 700;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+      transform: none;
+    }
+
+    .primary {
+      background: linear-gradient(135deg, var(--accent), #115e59);
+      color: white;
+      box-shadow: 0 14px 32px rgba(15, 118, 110, 0.26);
+    }
+
+    .secondary {
+      background: rgba(255, 255, 255, 0.8);
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    .ghost {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid rgba(15, 118, 110, 0.18);
+    }
+
+    .examples {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      border-radius: 999px;
+      border: 1px solid rgba(180, 83, 9, 0.16);
+      background: rgba(180, 83, 9, 0.08);
+      color: #7c3f0b;
+      padding: 8px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 16px;
+      min-height: 820px;
+    }
+
+    .feed {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .bubble {
+      border-radius: 20px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.8);
+    }
+
+    .bubble.user {
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(15, 118, 110, 0.05));
+    }
+
+    .bubble.assistant {
+      background: linear-gradient(135deg, rgba(180, 83, 9, 0.12), rgba(180, 83, 9, 0.05));
+    }
+
+    .bubble .tag {
+      display: inline-block;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      margin-bottom: 8px;
+      color: white;
+      background: var(--accent);
+    }
+
+    .bubble.assistant .tag {
+      background: var(--accent-2);
+    }
+
+    .bubble p {
+      margin: 0;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .mini-card {
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+      padding: 14px;
+    }
+
+    .mini-card .k {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .mini-card .v {
+      font-weight: 700;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .raw-panel {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    pre {
+      margin: 0;
+      background: #1c1917;
+      color: #f5f5f4;
+      border-radius: 18px;
+      padding: 18px;
+      overflow: auto;
+      min-height: 260px;
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .banner {
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(15, 118, 110, 0.14);
+      background: var(--accent-soft);
+      color: var(--text);
+    }
+
+    .banner.error {
+      border-color: rgba(185, 28, 28, 0.2);
+      background: rgba(185, 28, 28, 0.08);
+      color: var(--danger);
+    }
+
+    @media (max-width: 1180px) {
+      .hero,
+      .main-grid,
+      .cards,
+      .row {
+        grid-template-columns: 1fr;
+      }
+
+      .workspace {
+        min-height: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <article class="hero-card">
+        <h1>笨鸟 SB-RAG 控制台</h1>
+        <p class="subtitle">
+          这是一个直接挂在服务端里的工作台。你可以在这里切换结构化分析、RAG 检索和 MiMo 生成，
+          同时查看场景解释、文档命中、回答草案和原始 JSON。
+        </p>
+      </article>
+      <aside class="hero-card">
+        <div class="status-grid" id="statusGrid"></div>
+      </aside>
+    </section>
+
+    <section class="main-grid">
+      <aside class="panel stack">
+        <div>
+          <h2>对话输入</h2>
+          <p class="hint">同一个会话会保留上下文，适合连续补充场景细节。</p>
+        </div>
+
+        <div class="row">
+          <label>
+            会话 ID
+            <input id="sessionId" value="demo">
+          </label>
+          <label>
+            请求模式
+            <select id="mode">
+              <option value="chat">结构化分析 /chat</option>
+              <option value="rag_query" selected>RAG 查询 /rag_query</option>
+              <option value="generate">MiMo 生成 /generate</option>
+            </select>
+          </label>
+        </div>
+
+        <label>
+          场景描述
+          <textarea id="inputText">屋后空地上堆着碎砖和木板，旁边停着一辆小卡车，地面裸露，没有整齐堆放。</textarea>
+        </label>
+
+        <div class="examples">
+          <button class="chip" data-example="屋后空地上堆着碎砖和木板，旁边停着一辆小卡车，地面裸露，没有整齐堆放。">建筑废弃物</button>
+          <button class="chip" data-example="院子角落堆着塑料袋和生活杂物，旁边有翻倒的垃圾桶，地面散乱。">生活杂物</button>
+          <button class="chip" data-example="路边沟渠里有一片发黑的积水，周围有杂草，靠近居民房。">异常积水</button>
+          <button class="chip" data-example="桌子左边有一个红色杯子，杯子里有水，猫碰到了杯子。">杯子翻倒</button>
+        </div>
+
+        <div class="button-row">
+          <button class="primary" id="sendButton">发送</button>
+          <button class="secondary" id="statusButton">刷新状态</button>
+          <button class="ghost" id="clearButton">清空会话</button>
+        </div>
+
+        <div id="banner" class="banner">服务已就绪后，这里会显示提示信息。</div>
+
+        <div>
+          <h3>写入文档知识库</h3>
+          <p class="hint">给 SB-RAG 手动补一段知识，再立刻用它检索。</p>
+        </div>
+
+        <label>
+          文档标题
+          <input id="docTitle" value="手动补充：建筑废弃物堆放规则">
+        </label>
+        <label>
+          来源地址
+          <input id="docUrl" value="https://local.manual/sb-rag-note">
+        </label>
+        <label>
+          文档内容
+          <textarea id="docText">如果屋后空地上同时出现碎砖、木板、小卡车和裸露地面，且堆放不整齐，通常优先判断为建筑废弃物堆放或临时施工材料堆放。</textarea>
+        </label>
+        <div class="button-row">
+          <button class="secondary" id="ingestButton">写入 /rag_ingest</button>
+        </div>
+      </aside>
+
+      <section class="panel workspace">
+        <div>
+          <h2>对话结果</h2>
+          <p class="hint">上面显示摘要卡片，下面保留最近消息和完整 JSON。</p>
+        </div>
+
+        <div class="feed" id="feed"></div>
+
+        <div class="cards">
+          <div class="mini-card">
+            <span class="k">最佳场景</span>
+            <div class="v" id="bestHypothesis">等待请求</div>
+          </div>
+          <div class="mini-card">
+            <span class="k">回答草案 / 模型回答</span>
+            <div class="v" id="answerText">等待请求</div>
+          </div>
+          <div class="mini-card">
+            <span class="k">文档命中 / 主动提问</span>
+            <div class="v" id="retrievalInfo">等待请求</div>
+          </div>
+        </div>
+
+        <div class="raw-panel">
+          <h3>原始 JSON</h3>
+          <pre id="rawOutput">{}</pre>
+        </div>
+      </section>
+    </section>
+  </div>
+
+  <script>
+    const statusGrid = document.getElementById("statusGrid");
+    const sessionId = document.getElementById("sessionId");
+    const mode = document.getElementById("mode");
+    const inputText = document.getElementById("inputText");
+    const sendButton = document.getElementById("sendButton");
+    const statusButton = document.getElementById("statusButton");
+    const clearButton = document.getElementById("clearButton");
+    const ingestButton = document.getElementById("ingestButton");
+    const banner = document.getElementById("banner");
+    const feed = document.getElementById("feed");
+    const bestHypothesis = document.getElementById("bestHypothesis");
+    const answerText = document.getElementById("answerText");
+    const retrievalInfo = document.getElementById("retrievalInfo");
+    const rawOutput = document.getElementById("rawOutput");
+    const docTitle = document.getElementById("docTitle");
+    const docUrl = document.getElementById("docUrl");
+    const docText = document.getElementById("docText");
+
+    const state = {
+      messages: []
+    };
+
+    function setBanner(text, isError = false) {
+      banner.textContent = text;
+      banner.className = isError ? "banner error" : "banner";
+    }
+
+    function appendMessage(role, text) {
+      state.messages.push({ role, text, time: new Date().toLocaleTimeString("zh-CN") });
+      renderFeed();
+    }
+
+    function renderFeed() {
+      feed.innerHTML = "";
+      for (const item of state.messages.slice(-8)) {
+        const card = document.createElement("article");
+        card.className = `bubble ${item.role}`;
+        card.innerHTML = `
+          <span class="tag">${item.role === "user" ? "用户" : "系统"}</span>
+          <p>${escapeHtml(item.text)}</p>
+        `;
+        feed.appendChild(card);
+      }
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function renderStatus(data) {
+      const items = [
+        ["服务配置", data.config_path || "-"],
+        ["模型状态", `${data.llm_model || "-"} / ${data.llm_ready || "-"}`],
+        ["LLM 地址", data.llm_endpoint || "-"],
+        ["API Key", `${data.llm_api_key_env || "-"} / ${data.llm_api_key_present || "-"}`],
+        ["文档知识库", `${data.rag_documents || 0} docs / ${data.rag_chunks || 0} chunks`],
+        ["更新时间", data.updated_at || "-"]
+      ];
+      statusGrid.innerHTML = items.map(([label, value]) => `
+        <div class="status-item">
+          <span class="label">${escapeHtml(label)}</span>
+          <span class="value">${escapeHtml(String(value))}</span>
+        </div>
+      `).join("");
+    }
+
+    function summarizeResult(payload) {
+      const analysis = payload.analysis || payload;
+      const best = analysis.best_hypothesis;
+      bestHypothesis.textContent = best ? `${best.label} (${best.score})` : "未形成稳定结论";
+
+      const generated = payload.llm_response?.parsed_content?.answer
+        || payload.llm_response?.content
+        || analysis.answer_draft?.answer
+        || "暂无回答";
+      answerText.textContent = generated;
+
+      const docs = analysis.retrieved_documents || payload.retrieved_documents || [];
+      const questions = analysis.proactive_questions || payload.proactive_questions || [];
+      const lines = [];
+      if (docs.length) {
+        lines.push(`命中文档 ${docs.length} 条`);
+        for (const item of docs.slice(0, 2)) {
+          lines.push(`- ${item.title || item.source_url || "未命名文档"}`);
+        }
+      }
+      if (questions.length) {
+        lines.push(`主动提问 ${questions.length} 条`);
+        for (const item of questions.slice(0, 2)) {
+          lines.push(`- ${item.question}`);
+        }
+      }
+      retrievalInfo.textContent = lines.length ? lines.join("\n") : "暂无文档命中或主动提问";
+      rawOutput.textContent = JSON.stringify(payload, null, 2);
+    }
+
+    async function loadStatus() {
+      try {
+        const resp = await fetch("/status");
+        const data = await resp.json();
+        renderStatus(data);
+        setBanner(data.llm_ready === "true"
+          ? "服务与 MiMo 生成层都已就绪。"
+          : "服务已启动，但生成层还未完全就绪；你仍然可以先用结构化分析和 RAG。");
+      } catch (error) {
+        setBanner(`读取状态失败：${error.message}`, true);
+      }
+    }
+
+    async function sendQuery() {
+      const text = inputText.value.trim();
+      if (!text) {
+        setBanner("请输入场景描述。", true);
+        return;
+      }
+
+      const endpoint = `/${mode.value}`;
+      const payload = {
+        session_id: sessionId.value.trim() || "demo",
+        text
+      };
+
+      sendButton.disabled = true;
+      appendMessage("user", text);
+      setBanner(`正在请求 ${endpoint} ...`);
+
+      try {
+        const resp = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+        }
+        const summary = data.llm_response?.parsed_content?.answer
+          || data.llm_response?.content
+          || data.answer_draft?.answer
+          || data.best_hypothesis?.label
+          || data.analysis?.best_hypothesis?.label
+          || "请求完成";
+        appendMessage("assistant", summary);
+        summarizeResult(data);
+        setBanner(`${endpoint} 请求完成。`);
+        await loadStatus();
+      } catch (error) {
+        appendMessage("assistant", `请求失败：${error.message}`);
+        setBanner(`请求失败：${error.message}`, true);
+      } finally {
+        sendButton.disabled = false;
+      }
+    }
+
+    async function ingestDocument() {
+      const text = docText.value.trim();
+      if (!text) {
+        setBanner("文档内容不能为空。", true);
+        return;
+      }
+      ingestButton.disabled = true;
+      setBanner("正在写入文档知识库...");
+      try {
+        const resp = await fetch("/rag_ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({
+            source_url: docUrl.value.trim(),
+            title: docTitle.value.trim(),
+            text,
+            metadata: { source_type: "web_console" }
+          })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+        }
+        setBanner(`文档已写入，当前知识库 ${data.rag_stats.documents} 篇文档 / ${data.rag_stats.chunks} 个分块。`);
+        await loadStatus();
+      } catch (error) {
+        setBanner(`写入失败：${error.message}`, true);
+      } finally {
+        ingestButton.disabled = false;
+      }
+    }
+
+    function clearSession() {
+      state.messages = [];
+      renderFeed();
+      bestHypothesis.textContent = "等待请求";
+      answerText.textContent = "等待请求";
+      retrievalInfo.textContent = "等待请求";
+      rawOutput.textContent = "{}";
+      setBanner("前端会话视图已清空。服务端仍会保留同一 session_id 的上下文。");
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    sendButton.addEventListener("click", sendQuery);
+    statusButton.addEventListener("click", loadStatus);
+    clearButton.addEventListener("click", clearSession);
+    ingestButton.addEventListener("click", ingestDocument);
+
+    for (const button of document.querySelectorAll(".chip")) {
+      button.addEventListener("click", () => {
+        inputText.value = button.dataset.example || "";
+      });
+    }
+
+    loadStatus();
+  </script>
+</body>
+</html>

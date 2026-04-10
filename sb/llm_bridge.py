@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Sequence
 
+from .llm_runtime import SBLLMRuntime
 from .vector_memory import VectorHit, VectorMemoryIndex
 
 
@@ -9,40 +10,30 @@ def build_llm_context(
     input_text: str,
     analysis: Dict[str, object],
     vector_hits: Sequence[VectorHit],
+    dialog_state: Dict[str, object] | None = None,
+    history_summary: str = "",
 ) -> Dict[str, object]:
-    scene_lines = []
-    for item in analysis.get("scene_hypotheses", [])[:3]:
-        scene_lines.append(f"{item['label']} ({item['score']})")
-
-    memory_lines = []
-    for hit in vector_hits[:6]:
-        memory_lines.append(
-            {
-                "label": hit.label,
-                "space_type": hit.space_type,
-                "score": round(hit.score, 3),
-                "supports": list(hit.supports),
-                "text": hit.text,
-            }
-        )
-
-    system_prompt = (
-        "你是笨鸟的语言生成层。"
-        "必须优先依据结构化分析结果和检索到的记忆回答，"
-        "不要捏造未在输入、结构化结果或记忆中出现的事实。"
+    runtime = SBLLMRuntime()
+    memory_lines = [
+        {
+            "label": hit.label,
+            "space_type": hit.space_type,
+            "score": round(hit.score, 3),
+            "supports": list(hit.supports),
+            "text": hit.text,
+        }
+        for hit in vector_hits[:6]
+    ]
+    packet = runtime.build_packet(
+        input_text=input_text,
+        analysis=analysis,
+        retrieved_memories=memory_lines,
+        dialog_state=dialog_state,
+        history_summary=history_summary,
     )
-    user_prompt = (
-        f"用户输入：{input_text}\n"
-        f"候选场景：{'；'.join(scene_lines) if scene_lines else '无'}\n"
-        "请先参考结构化结果，再组织自然语言回复。"
-    )
-
-    return {
-        "system_prompt": system_prompt,
-        "user_prompt": user_prompt,
-        "structured_analysis": analysis,
-        "retrieved_memories": memory_lines,
-    }
+    packet["structured_analysis"] = analysis
+    packet["retrieved_memories"] = memory_lines
+    return packet
 
 
 def retrieve_for_llm(

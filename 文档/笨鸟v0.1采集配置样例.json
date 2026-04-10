@@ -24,12 +24,13 @@
   ],
   "quality_gate": {
     "promote_to_candidate": 0.85,
-    "promote_to_temporary": 0.70,
+    "promote_to_temporary": 0.7,
     "min_sources_for_stable": 3,
     "conflict_penalty": 0.15
   },
   "knowledge_store": {
     "path": "文档/笨鸟v0.1采集知识库.json",
+    "rag_store_path": "文档/笨鸟v0.1文档知识库.json",
     "base_config_path": "文档/笨鸟v0.1配置样例.json",
     "online_config_path": "文档/笨鸟v0.1配置在线.json"
   },
@@ -51,5 +52,26 @@
     "enabled": true,
     "top_k": 6,
     "min_score": 0.2
+  },
+  "rag": {
+    "top_k_docs": 6,
+    "per_query_top_k": 6,
+    "chunk_size": 220,
+    "chunk_overlap": 40
+  },
+  "llm": {
+    "enabled": true,
+    "provider": "openai_compatible",
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "chat_path": "/chat/completions",
+    "model": "mimo-v2-pro",
+    "api_key_env": "MIMO_API_KEY",
+    "timeout_seconds": 60,
+    "temperature": 0.2,
+    "top_p": 1.0,
+    "max_tokens": 800,
+    "include_response_format": false,
+    "response_format_type": "json_object",
+    "extra_headers": {}
   }
 }
