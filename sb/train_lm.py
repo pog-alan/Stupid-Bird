@@ -31,6 +31,19 @@ class ExperimentStage:
     acceptance: List[str]
 
 
+@dataclass(frozen=True)
+class CurriculumStage:
+    stage_id: str
+    prefix_len: int
+    filler_len: int
+    key_length: int = 2
+    steps: int = 120
+
+    @property
+    def sequence_length(self) -> int:
+        return 1 + self.prefix_len + 1 + self.key_length + self.filler_len + 1 + self.key_length + 1
+
+
 class SBCoreTrainingPlan:
     """定义 SB-Core 从玩具任务到小型语言模型的训练路线。"""
 
@@ -88,3 +101,14 @@ class SBCoreTrainingPlan:
             "active slots per token",
             "slot usage entropy",
         ]
+
+    def passkey_curriculum(self) -> List[CurriculumStage]:
+        return [
+            CurriculumStage(stage_id="C0", prefix_len=4, filler_len=4, steps=120),
+            CurriculumStage(stage_id="C1", prefix_len=6, filler_len=8, steps=120),
+            CurriculumStage(stage_id="C2", prefix_len=10, filler_len=14, steps=120),
+            CurriculumStage(stage_id="C3", prefix_len=14, filler_len=20, steps=120),
+        ]
+
+    def fixed_passkey_baseline(self) -> CurriculumStage:
+        return CurriculumStage(stage_id="B0", prefix_len=6, filler_len=8, steps=220)

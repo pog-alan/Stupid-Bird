@@ -31,7 +31,7 @@ from .rag_store import DocumentChunk, RAGKnowledgeBase, SourceDocument
 from .reasoner import SBV01Engine
 from .router import RouterConfig, RoutingDecision, SparseRouterSpec
 from .server import run_server
-from .train_lm import ExperimentStage, LossWeights, SBCoreTrainingPlan, TrainLMConfig
+from .train_lm import CurriculumStage, ExperimentStage, LossWeights, SBCoreTrainingPlan, TrainLMConfig
 from .vector_memory import HashedVectorEncoder, MemoryRecord, VectorHit, VectorMemoryIndex
 
 _TORCH_AVAILABLE = True
@@ -56,6 +56,7 @@ __all__ = [
     "CrawlSource",
     "Crawler",
     "CrawlerConfig",
+    "CurriculumStage",
     "DialogStore",
     "DocumentChunk",
     "EMBEDDING_PRESETS",
