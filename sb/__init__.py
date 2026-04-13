@@ -10,6 +10,23 @@ from .embedding_backends import (
     resolve_embedding_backend_config,
 )
 from .extractor import ExtractedCandidate, SimpleExtractor
+from .hierarchical_context import (
+    ForgetStage,
+    ForgettingPolicy,
+    HierarchicalContextConfig,
+    HierarchicalContextSpec,
+    MappingCardinality,
+    MappingRelation,
+    MemoryLevel,
+    MemoryNode,
+    MergeMode,
+    MergePlan,
+    MergePolicy,
+    ForgettingStep,
+    ReplayQuery,
+    ReplaySegment,
+    SummaryLevelConfig,
+)
 from .ingest import Ingestor, KnowledgeStore, apply_stable_entries_to_config
 from .llm_bridge import build_llm_context, retrieve_for_llm
 from .llm_client import LLMConfig, OpenAICompatibleLLMClient, create_llm_client, load_llm_config
@@ -45,6 +62,7 @@ try:
         sample_passkey_batch,
     )
     from .core_lm_torch import SBCoreMiniLM, SBCoreMiniTorchConfig, next_token_loss
+    from .core_lm_torch import runtime_device_report
     from .transformer_baseline import TinyTransformerConfig, TinyTransformerLM
 except ModuleNotFoundError as exc:
     if exc.name != "torch":
@@ -63,8 +81,13 @@ __all__ = [
     "EmbeddingEncoder",
     "ExperimentStage",
     "ExtractedCandidate",
+    "ForgetStage",
+    "ForgettingStep",
+    "ForgettingPolicy",
     "HTTPEmbeddingEncoder",
     "HashedVectorEncoder",
+    "HierarchicalContextConfig",
+    "HierarchicalContextSpec",
     "Hypothesis",
     "Ingestor",
     "KnowledgeStore",
@@ -74,15 +97,24 @@ __all__ = [
     "LongContextScenario",
     "LongContextTask",
     "LossWeights",
+    "MappingCardinality",
+    "MappingRelation",
     "MemoryBankConfig",
+    "MemoryLevel",
+    "MemoryNode",
     "MemoryRecord",
     "MemorySlot",
     "MemoryUpdatePlan",
+    "MergePolicy",
+    "MergeMode",
+    "MergePlan",
     "OpenAICompatibleLLMClient",
     "ProactiveQuestion",
     "QualityGate",
     "QualityGateConfig",
     "RAGKnowledgeBase",
+    "ReplayQuery",
+    "ReplaySegment",
     "RouterConfig",
     "RoutingDecision",
     "SBLLMRuntime",
@@ -103,6 +135,7 @@ __all__ = [
     "Space",
     "SparseMemoryBankSpec",
     "SparseRouterSpec",
+    "SummaryLevelConfig",
     "TrainLMConfig",
     "TransformRule",
     "VectorHit",
@@ -132,6 +165,7 @@ if _TORCH_AVAILABLE:
             "ToyTaskVocab",
             "decode_tokens",
             "next_token_loss",
+            "runtime_device_report",
             "sample_copy_batch",
             "sample_needle_in_haystack_batch",
             "sample_passkey_batch",

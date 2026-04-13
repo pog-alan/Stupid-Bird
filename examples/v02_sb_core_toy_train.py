@@ -5,12 +5,13 @@ import json
 import torch
 
 from sb.core_lm_data import decode_tokens, sample_copy_batch
-from sb.core_lm_torch import SBCoreMiniLM, SBCoreMiniTorchConfig, next_token_loss
+from sb.core_lm_torch import SBCoreMiniLM, SBCoreMiniTorchConfig, next_token_loss, runtime_device_report
 
 
 def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(7)
+    print(json.dumps({"runtime": runtime_device_report(device)}, ensure_ascii=False))
 
     config = SBCoreMiniTorchConfig(
         vocab_size=16,

@@ -14,7 +14,7 @@ from sb.core_lm_data import (
     sample_needle_in_haystack_batch,
     sample_passkey_batch,
 )
-from sb.core_lm_torch import SBCoreMiniLM, SBCoreMiniTorchConfig
+from sb.core_lm_torch import SBCoreMiniLM, SBCoreMiniTorchConfig, runtime_device_report
 from sb.eval_long_context import LongContextMeasurement
 from sb.transformer_baseline import TinyTransformerConfig, TinyTransformerLM
 
@@ -303,6 +303,7 @@ def main() -> None:
 
     report = {
         "device": device,
+        "runtime": runtime_device_report(device),
         "vocab_size": vocab_size,
         "max_seq_len": max_seq_len,
         "train_steps": train_steps,
