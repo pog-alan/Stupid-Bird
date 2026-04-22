@@ -32,6 +32,12 @@ class LongContextMeasurement:
     long_context_token_acc: float
     long_context_exact_match: float
     eval_ms_per_batch: float
+    segmented_carry_off_token_acc: float = 0.0
+    segmented_carry_off_exact_match: float = 0.0
+    segmented_token_acc: float = 0.0
+    segmented_exact_match: float = 0.0
+    carry_gain_token_acc: float = 0.0
+    carry_gain_exact_match: float = 0.0
 
 
 class LongContextEvaluationSuite:

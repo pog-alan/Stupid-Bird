@@ -5,7 +5,14 @@ import json
 import torch
 
 from sb.core_lm_data import decode_tokens, sample_copy_batch
-from sb.core_lm_torch import SBCoreMiniLM, SBCoreMiniTorchConfig, next_token_loss, runtime_device_report
+from sb.core_lm_torch import (
+    SBCoreMiniLM,
+    SBCoreMiniTorchConfig,
+    SBRuntimeGates,
+    next_token_loss,
+    runtime_device_report,
+    staged_runtime_gates,
+)
 
 
 def main() -> None:
@@ -26,9 +33,15 @@ def main() -> None:
     )
     model = SBCoreMiniLM(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=7e-3, weight_decay=0.01)
+    warmup_steps = 24
 
     losses = []
     for step in range(160):
+        stage_name, stage_gates = staged_runtime_gates(step_index=step, total_steps=160)
+        model.set_runtime_gates(stage_gates)
+        lr_scale = min(1.0, float(step + 1) / float(warmup_steps))
+        for group in optimizer.param_groups:
+            group["lr"] = 7e-3 * lr_scale
         sequence = sample_copy_batch(batch_size=48, segment_len=4, vocab_size=config.vocab_size, device=device)
         inputs = sequence[:, :-1]
         targets = sequence[:, 1:]
@@ -47,6 +60,8 @@ def main() -> None:
                 json.dumps(
                     {
                         "step": step + 1,
+                        "stage": stage_name,
+                        "runtime_gates": model.get_runtime_gates(),
                         "loss": round(losses[-1], 4),
                         "aux": forward["aux"],
                     },
@@ -58,6 +73,7 @@ def main() -> None:
     eval_inputs = eval_seq[:, :-1]
     eval_targets = eval_seq[:, 1:]
     with torch.no_grad():
+        model.set_runtime_gates(SBRuntimeGates())
         eval_forward = model(eval_inputs)
         predictions = eval_forward["logits"].argmax(dim=-1)
         eval_loss = next_token_loss(eval_forward["logits"], eval_targets)
