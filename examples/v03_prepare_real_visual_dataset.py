@@ -24,18 +24,46 @@ def _load_module(module_name: str, path: Path) -> object:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare a real SB-Visual scene dataset from rural/urban image folders.")
-    parser.add_argument("--source-root", required=True)
+    parser.add_argument("--source-root", default="")
+    parser.add_argument(
+        "--scene-root",
+        action="append",
+        default=[],
+        help="Per-scene source root in the form scene_name=path. Example: rural=D:\\SB\\rural",
+    )
     parser.add_argument("--destination-root", required=True)
     parser.add_argument("--scene-names", default="rural,urban")
     parser.add_argument("--source-annotation-manifest", default="")
+    parser.add_argument(
+        "--scene-annotation-manifest",
+        action="append",
+        default=[],
+        help="Per-scene annotation manifest in the form scene_name=path.",
+    )
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--split-names", default="train,val,test")
     parser.add_argument("--copy-files", action="store_true")
     parser.add_argument("--no-copy-files", action="store_true")
     parser.add_argument("--include-classification-qa", action="store_true")
     parser.add_argument("--no-classification-qa", action="store_true")
+    parser.add_argument("--include-relation-predicate-qa", action="store_true")
     parser.add_argument("--output-path", default="")
     return parser
+
+
+def _parse_mapping_entries(entries: list[str], *, argument_name: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for raw_entry in entries:
+        if "=" not in raw_entry:
+            raise ValueError(f"{argument_name} requires scene=path entries, got: {raw_entry}")
+        key, value = raw_entry.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            raise ValueError(f"{argument_name} requires scene=path entries, got: {raw_entry}")
+        mapping[key] = value
+    return mapping
 
 
 def _resolve_output_path(path_str: str) -> Path:
@@ -60,16 +88,41 @@ def main() -> None:
         include_classification_qa = True
 
     scene_names = tuple(item.strip() for item in args.scene_names.split(",") if item.strip())
-    prepared = visual_data.prepare_real_scene_dataset(
-        args.source_root,
-        args.destination_root,
-        scene_names=scene_names,
-        source_annotation_manifest=args.source_annotation_manifest or None,
-        train_ratio=float(args.train_ratio),
-        seed=int(args.seed),
-        copy_files=copy_files,
-        include_classification_qa=include_classification_qa,
+    scene_roots = _parse_mapping_entries(list(args.scene_root), argument_name="--scene-root")
+    scene_annotation_manifests = _parse_mapping_entries(
+        list(args.scene_annotation_manifest),
+        argument_name="--scene-annotation-manifest",
     )
+    split_names = tuple(item.strip() for item in args.split_names.split(",") if item.strip())
+
+    if scene_roots:
+        missing_scenes = [scene_name for scene_name in scene_names if scene_name not in scene_roots]
+        if missing_scenes:
+            raise ValueError(
+                f"missing --scene-root entries for scenes: {', '.join(missing_scenes)}"
+            )
+        prepared = visual_data.prepare_real_scene_dataset_from_scene_roots(
+            {scene_name: scene_roots[scene_name] for scene_name in scene_names},
+            args.destination_root,
+            source_annotation_manifests=scene_annotation_manifests or None,
+            split_names=split_names,
+            copy_files=copy_files,
+            include_classification_qa=include_classification_qa,
+            include_relation_predicate_qa=bool(args.include_relation_predicate_qa),
+        )
+    else:
+        if not args.source_root:
+            raise ValueError("either --source-root or --scene-root must be provided.")
+        prepared = visual_data.prepare_real_scene_dataset(
+            args.source_root,
+            args.destination_root,
+            scene_names=scene_names,
+            source_annotation_manifest=args.source_annotation_manifest or None,
+            train_ratio=float(args.train_ratio),
+            seed=int(args.seed),
+            copy_files=copy_files,
+            include_classification_qa=include_classification_qa,
+        )
     output_path = _resolve_output_path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(prepared, ensure_ascii=False, indent=2), encoding="utf-8")

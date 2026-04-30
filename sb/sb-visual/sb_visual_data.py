@@ -85,6 +85,10 @@ class SBVisualRelationTargets:
     relationness_targets: Tensor
     predicate_targets: Tensor
     predicate_valid_mask: Tensor
+    pair_relationness_targets: Tensor
+    pair_predicate_targets: Tensor
+    pair_predicate_valid_mask: Tensor
+    pair_relation_valid_mask: Tensor
 
 
 @dataclass(frozen=True)
@@ -442,6 +446,14 @@ def sample_visual_batch(
             else:
                 qa_index = rng.randrange(len(sample.qa_pairs))
             metadata = dict(sample.metadata)
+            metadata["all_qa_pairs"] = [
+                {
+                    "question": qa.question,
+                    "answer": qa.answer,
+                    "answer_type": qa.answer_type,
+                }
+                for qa in sample.qa_pairs
+            ]
             metadata["sampled_qa_index"] = qa_index
             metadata["sampled_qa_answer_type"] = sample.qa_pairs[qa_index].answer_type
             if qa_type_weights:
@@ -555,24 +567,83 @@ def build_relation_targets(
     relationness_targets = torch.zeros(len(batch.image_paths), patch_count, device=target_device, dtype=torch.float32)
     predicate_targets = torch.zeros(len(batch.image_paths), patch_count, device=target_device, dtype=torch.long)
     predicate_valid_mask = torch.zeros(len(batch.image_paths), patch_count, device=target_device, dtype=torch.float32)
+    pair_relationness_targets = torch.zeros(
+        len(batch.image_paths),
+        patch_count,
+        patch_count,
+        device=target_device,
+        dtype=torch.float32,
+    )
+    pair_predicate_targets = torch.zeros(
+        len(batch.image_paths),
+        patch_count,
+        patch_count,
+        device=target_device,
+        dtype=torch.long,
+    )
+    pair_predicate_valid_mask = torch.zeros(
+        len(batch.image_paths),
+        patch_count,
+        patch_count,
+        device=target_device,
+        dtype=torch.float32,
+    )
+    pair_relation_valid_mask = torch.zeros(
+        len(batch.image_paths),
+        patch_count,
+        patch_count,
+        device=target_device,
+        dtype=torch.float32,
+    )
 
     for batch_index, relations in enumerate(batch.relations):
-        if not relations or not batch.boxes_xyxy[batch_index].numel():
+        if not batch.boxes_xyxy[batch_index].numel():
             continue
         boxes = batch.boxes_xyxy[batch_index].detach().cpu()
+        box_patch_indices = [
+            _box_center_to_patch_index(
+                tuple(float(value) for value in box.tolist()),
+                image_size=image_size,
+                patch_grid=patch_grid,
+            )
+            for box in boxes
+        ]
+        for subject_box_index, subject_patch_index in enumerate(box_patch_indices):
+            for object_box_index, object_patch_index in enumerate(box_patch_indices):
+                if subject_box_index == object_box_index:
+                    continue
+                pair_relation_valid_mask[batch_index, subject_patch_index, object_patch_index] = 1.0
+        if not relations:
+            continue
         for relation in relations:
-            if relation.subject < 0 or relation.subject >= boxes.shape[0]:
+            if (
+                relation.subject < 0
+                or relation.subject >= boxes.shape[0]
+                or relation.object < 0
+                or relation.object >= boxes.shape[0]
+            ):
                 continue
             subject_box = tuple(float(value) for value in boxes[relation.subject].tolist())
-            patch_index = _box_center_to_patch_index(subject_box, image_size=image_size, patch_grid=patch_grid)
-            relationness_targets[batch_index, patch_index] = 1.0
-            predicate_valid_mask[batch_index, patch_index] = 1.0
-            predicate_targets[batch_index, patch_index] = int(predicate_to_index.get(relation.predicate, 0))
+            object_box = tuple(float(value) for value in boxes[relation.object].tolist())
+            subject_patch_index = _box_center_to_patch_index(subject_box, image_size=image_size, patch_grid=patch_grid)
+            object_patch_index = _box_center_to_patch_index(object_box, image_size=image_size, patch_grid=patch_grid)
+            predicate_index = int(predicate_to_index.get(relation.predicate, 0))
+            relationness_targets[batch_index, subject_patch_index] = 1.0
+            predicate_valid_mask[batch_index, subject_patch_index] = 1.0
+            predicate_targets[batch_index, subject_patch_index] = predicate_index
+            pair_relationness_targets[batch_index, subject_patch_index, object_patch_index] = 1.0
+            pair_relation_valid_mask[batch_index, subject_patch_index, object_patch_index] = 1.0
+            pair_predicate_valid_mask[batch_index, subject_patch_index, object_patch_index] = 1.0
+            pair_predicate_targets[batch_index, subject_patch_index, object_patch_index] = predicate_index
 
     return SBVisualRelationTargets(
         relationness_targets=relationness_targets,
         predicate_targets=predicate_targets,
         predicate_valid_mask=predicate_valid_mask,
+        pair_relationness_targets=pair_relationness_targets,
+        pair_predicate_targets=pair_predicate_targets,
+        pair_predicate_valid_mask=pair_predicate_valid_mask,
+        pair_relation_valid_mask=pair_relation_valid_mask,
     )
 
 
@@ -585,6 +656,9 @@ def build_visual_qa_vocabulary(
     answer_counter: Counter[str] = Counter()
     answers = {"<unk>"}
     for sample in samples:
+        for box in sample.boxes:
+            # Relation QA may need to emit any visible object label, not only labels already seen as QA answers.
+            answers.add(str(box.label))
         for qa_pair in sample.qa_pairs:
             counter.update(qa_pair.question)
             answers.add(qa_pair.answer)
@@ -613,6 +687,13 @@ def build_qa_answer_type_constraints(
 ) -> Dict[str, Tuple[int, ...]]:
     constraints: Dict[str, set[int]] = {}
     for sample in samples:
+        relation_answer_ids = {
+            int(qa_vocabulary.answer_stoi[box.label])
+            for box in sample.boxes
+            if box.label in qa_vocabulary.answer_stoi
+        }
+        if relation_answer_ids:
+            constraints.setdefault("relation", set()).update(relation_answer_ids)
         for qa_pair in sample.qa_pairs:
             answer_type = str(qa_pair.answer_type or "").strip() or "unknown"
             answer_id = int(qa_vocabulary.answer_stoi.get(qa_pair.answer, 0))
@@ -977,6 +1058,431 @@ def _find_flat_scene_images(
     return scene_to_images
 
 
+def _discover_scene_split_dir(scene_root: Path, scene_name: str, split_name: str) -> Path | None:
+    candidates = [
+        scene_root / split_name,
+        scene_root / scene_name / split_name,
+        scene_root / scene_name.lower() / split_name,
+        scene_root / scene_name.upper() / split_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            return candidate.resolve()
+    fallback = sorted(
+        [path.resolve() for path in scene_root.rglob(split_name) if path.is_dir()],
+        key=lambda path: (len(path.parts), str(path).lower()),
+    )
+    return fallback[0] if fallback else None
+
+
+def _discover_split_image_dir(split_dir: Path, allowed_extensions: Sequence[str]) -> Path | None:
+    preferred_names = ("images", "images_png", "imgs", "img", "image")
+    for name in preferred_names:
+        candidate = split_dir / name
+        if candidate.exists() and candidate.is_dir():
+            has_images = any(_is_image_file(path, allowed_extensions) for path in candidate.rglob("*"))
+            if has_images:
+                return candidate.resolve()
+    direct_images = [path for path in split_dir.iterdir() if _is_image_file(path, allowed_extensions)]
+    if direct_images:
+        return split_dir.resolve()
+    fallback_dirs = []
+    for candidate in split_dir.iterdir():
+        if not candidate.is_dir():
+            continue
+        lowered = candidate.name.lower()
+        if "mask" in lowered or "label" in lowered or "annot" in lowered:
+            continue
+        has_images = any(_is_image_file(path, allowed_extensions) for path in candidate.rglob("*"))
+        if has_images:
+            fallback_dirs.append(candidate.resolve())
+    if fallback_dirs:
+        fallback_dirs.sort(key=lambda path: (len(path.parts), str(path).lower()))
+        return fallback_dirs[0]
+    return None
+
+
+def _discover_split_mask_dir(split_dir: Path) -> Path | None:
+    preferred_names = ("masks_png", "masks", "labels_png", "labels", "mask", "label")
+    for name in preferred_names:
+        candidate = split_dir / name
+        if candidate.exists() and candidate.is_dir():
+            return candidate.resolve()
+    fallback_dirs = []
+    for candidate in split_dir.iterdir():
+        if candidate.is_dir() and ("mask" in candidate.name.lower() or "label" in candidate.name.lower()):
+            fallback_dirs.append(candidate.resolve())
+    if fallback_dirs:
+        fallback_dirs.sort(key=lambda path: (len(path.parts), str(path).lower()))
+        return fallback_dirs[0]
+    return None
+
+
+def _find_scene_split_images(
+    scene_root: Path,
+    *,
+    scene_name: str,
+    split_names: Sequence[str],
+    allowed_extensions: Sequence[str],
+) -> tuple[Dict[str, List[Path]], Dict[str, str]]:
+    split_to_images: Dict[str, List[Path]] = {}
+    split_sources: Dict[str, str] = {}
+    for split_name in split_names:
+        split_dir = _discover_scene_split_dir(scene_root, scene_name, split_name)
+        if split_dir is None:
+            continue
+        image_dir = _discover_split_image_dir(split_dir, allowed_extensions)
+        if image_dir is None:
+            continue
+        images = sorted(path.resolve() for path in image_dir.rglob("*") if _is_image_file(path, allowed_extensions))
+        if not images:
+            continue
+        split_to_images[split_name] = images
+        split_sources[split_name] = str(image_dir)
+    return split_to_images, split_sources
+
+
+def _find_mask_path_for_image(image_path: Path, mask_dir: Path | None) -> Path | None:
+    if mask_dir is None:
+        return None
+    candidates = [
+        mask_dir / f"{image_path.stem}.png",
+        mask_dir / image_path.name,
+        mask_dir / f"{image_path.stem}{image_path.suffix.lower()}",
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+    fallback = sorted(mask_dir.glob(f"{image_path.stem}.*"))
+    return fallback[0].resolve() if fallback else None
+
+
+def _lookup_annotation_record(
+    image_path: Path,
+    *,
+    source_root_path: Path,
+    annotation_records: Mapping[str, SBVisualAnnotationRecord],
+) -> SBVisualAnnotationRecord | None:
+    source_rel_key = (
+        _normalize_image_key(image_path.relative_to(source_root_path))
+        if source_root_path in image_path.parents or image_path == source_root_path
+        else ""
+    )
+    source_parent_rel_key = (
+        _normalize_image_key(image_path.relative_to(source_root_path.parent))
+        if source_root_path.parent in image_path.parents or image_path == source_root_path.parent
+        else ""
+    )
+    source_abs_key = _normalize_image_key(image_path)
+    source_name_key = _normalize_image_key(image_path.name)
+    return (
+        annotation_records.get(source_rel_key)
+        or annotation_records.get(source_parent_rel_key)
+        or annotation_records.get(source_abs_key)
+        or annotation_records.get(source_name_key)
+    )
+
+
+def _serialize_annotation_payload(
+    annotation: SBVisualAnnotationRecord | None,
+    *,
+    scene_name: str,
+    image_path: Path,
+    source_split: str,
+    include_classification_qa: bool,
+) -> tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, object]], Dict[str, object]]:
+    metadata = {
+        "synthetic": False,
+        "source_path": str(image_path),
+        "source_scene_name": scene_name,
+        "source_split": source_split,
+    }
+    if annotation is not None:
+        metadata.update(annotation.metadata)
+
+    boxes: List[Dict[str, object]] = []
+    relations: List[Dict[str, object]] = []
+    qa_pairs: List[Dict[str, object]] = []
+    if annotation is not None:
+        boxes = [
+            {
+                "label": box.label,
+                "xyxy": list(box.xyxy),
+                "attributes": list(box.attributes),
+            }
+            for box in annotation.boxes
+        ]
+        relations = [
+            {
+                "subject": relation.subject,
+                "predicate": relation.predicate,
+                "object": relation.object,
+                "confidence": relation.confidence,
+            }
+            for relation in annotation.relations
+        ]
+        qa_pairs.extend(
+            {
+                "question": qa.question,
+                "answer": qa.answer,
+                "answer_type": qa.answer_type,
+            }
+            for qa in annotation.qa_pairs
+        )
+    if include_classification_qa:
+        has_scene_question = any(
+            str(qa.get("question", "")).strip().lower() == "what scene is shown?"
+            for qa in qa_pairs
+        )
+        if not has_scene_question:
+            qa_pairs.append(
+                {
+                    "question": "what scene is shown?",
+                    "answer": scene_name,
+                    "answer_type": "classification",
+                }
+            )
+    return boxes, relations, qa_pairs, metadata
+
+
+def _derive_mask_annotations(
+    mask_path: Path,
+    *,
+    min_region_area: int = 128,
+    max_regions: int = 6,
+    max_relations: int = 6,
+    include_relation_predicate_qa: bool = False,
+) -> tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, object]], Dict[str, object]]:
+    mask = np.asarray(Image.open(mask_path).convert("L"), dtype=np.int32)
+    image_area = int(mask.shape[0] * mask.shape[1])
+    values, counts = np.unique(mask, return_counts=True)
+    if len(values) == 0:
+        return [], [], [], {"mask_path": str(mask_path), "weak_mask_supervision": False}
+    background_value = int(values[np.argmax(counts)])
+
+    def _component_boxes(mask_value: int) -> List[tuple[int, int, List[int]]]:
+        value_mask = mask == int(mask_value)
+        try:
+            from scipy import ndimage  # type: ignore
+
+            labeled, component_count = ndimage.label(value_mask, structure=np.ones((3, 3), dtype=np.int8))
+            slices = ndimage.find_objects(labeled)
+            components: List[tuple[int, int, List[int]]] = []
+            for component_index, component_slice in enumerate(slices, start=1):
+                if component_slice is None:
+                    continue
+                local_mask = labeled[component_slice] == component_index
+                component_area = int(np.count_nonzero(local_mask))
+                if component_area < min_region_area:
+                    continue
+                y_slice, x_slice = component_slice
+                components.append(
+                    (
+                        int(component_index),
+                        component_area,
+                        [
+                            int(x_slice.start),
+                            int(y_slice.start),
+                            int(x_slice.stop),
+                            int(y_slice.stop),
+                        ],
+                    )
+                )
+            if components or int(component_count) > 0:
+                return components
+        except Exception:
+            pass
+
+        ys, xs = np.where(value_mask)
+        if len(xs) == 0 or len(ys) == 0:
+            return []
+        return [
+            (
+                1,
+                int(len(xs)),
+                [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1],
+            )
+        ]
+
+    regions: List[Dict[str, object]] = []
+    for value, count in zip(values.tolist(), counts.tolist()):
+        if int(value) == background_value or int(count) < min_region_area:
+            continue
+        for component_index, component_area, xyxy in _component_boxes(int(value)):
+            x1, y1, x2, y2 = [int(item) for item in xyxy]
+            bbox_area = int((x2 - x1) * (y2 - y1))
+            bbox_ratio = float(bbox_area) / float(max(image_area, 1))
+            compactness = float(component_area) / float(max(bbox_area, 1))
+            width_ratio = float(x2 - x1) / float(max(mask.shape[1], 1))
+            height_ratio = float(y2 - y1) / float(max(mask.shape[0], 1))
+            if bbox_ratio >= 0.9 and compactness < 0.6:
+                continue
+            if bbox_ratio >= 0.35:
+                continue
+            if (width_ratio >= 0.85 or height_ratio >= 0.85) and bbox_ratio >= 0.08:
+                continue
+            regions.append(
+                {
+                    "mask_value": int(value),
+                    "component_index": int(component_index),
+                    "area": int(component_area),
+                    "xyxy": [x1, y1, x2, y2],
+                    "label": f"mask_region_{int(value)}",
+                    "attributes": [f"mask_id_{int(value)}", f"component_{int(component_index)}", "weak_mask"],
+                    "bbox_ratio": bbox_ratio,
+                    "compactness": compactness,
+                }
+            )
+    regions.sort(key=lambda item: int(item["area"]), reverse=True)
+    regions = regions[:max_regions]
+    for region_index, region in enumerate(regions, start=1):
+        source_label = str(region["label"])
+        attributes = list(region["attributes"])
+        attributes.append(source_label)
+        region["source_label"] = source_label
+        region["label"] = f"region_{region_index}"
+        region["attributes"] = attributes
+
+    boxes = [
+        {
+            "label": str(region["label"]),
+            "xyxy": list(region["xyxy"]),
+            "attributes": list(region["attributes"]),
+        }
+        for region in regions
+    ]
+
+    def _center(box_xyxy: Sequence[int]) -> tuple[float, float]:
+        return (
+            0.5 * (float(box_xyxy[0]) + float(box_xyxy[2])),
+            0.5 * (float(box_xyxy[1]) + float(box_xyxy[3])),
+        )
+
+    def _box_iou(left_xyxy: Sequence[int], right_xyxy: Sequence[int]) -> float:
+        ix1 = max(float(left_xyxy[0]), float(right_xyxy[0]))
+        iy1 = max(float(left_xyxy[1]), float(right_xyxy[1]))
+        ix2 = min(float(left_xyxy[2]), float(right_xyxy[2]))
+        iy2 = min(float(left_xyxy[3]), float(right_xyxy[3]))
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        left_area = max(1.0, (float(left_xyxy[2]) - float(left_xyxy[0])) * (float(left_xyxy[3]) - float(left_xyxy[1])))
+        right_area = max(1.0, (float(right_xyxy[2]) - float(right_xyxy[0])) * (float(right_xyxy[3]) - float(right_xyxy[1])))
+        return inter / max(left_area + right_area - inter, 1.0)
+
+    def _spatial_predicate(subject_xyxy: Sequence[int], object_xyxy: Sequence[int]) -> tuple[str, float]:
+        subject_center = _center(subject_xyxy)
+        object_center = _center(object_xyxy)
+        dx = subject_center[0] - object_center[0]
+        dy = subject_center[1] - object_center[1]
+        iou = _box_iou(subject_xyxy, object_xyxy)
+        if iou >= 0.2:
+            return "overlaps", min(1.0, 0.65 + iou)
+        abs_dx = abs(dx)
+        abs_dy = abs(dy)
+        dominant_margin = 1.15
+        if abs_dx >= max(abs_dy * dominant_margin, 1.0):
+            confidence = min(1.0, 0.55 + abs_dx / float(max(mask.shape[1], 1)))
+            return ("left_of" if dx < 0.0 else "right_of"), confidence
+        if abs_dy >= max(abs_dx * dominant_margin, 1.0):
+            confidence = min(1.0, 0.55 + abs_dy / float(max(mask.shape[0], 1)))
+            return ("above" if dy < 0.0 else "below"), confidence
+        distance = float(np.hypot(dx, dy))
+        return "near", max(0.1, 1.0 - distance / float(max(mask.shape)))
+
+    relation_question_prefix = {
+        "left_of": "left of",
+        "right_of": "right of",
+        "above": "above",
+        "below": "below",
+        "overlaps": "overlapping",
+        "near": "near",
+    }
+
+    relations: List[Dict[str, object]] = []
+    relation_candidates: List[tuple[float, int, Dict[str, object]]] = []
+    for subject_index in range(len(regions)):
+        for object_index in range(len(regions)):
+            if subject_index == object_index:
+                continue
+            subject = regions[subject_index]
+            obj = regions[object_index]
+            subject_center = _center(subject["xyxy"])
+            object_center = _center(obj["xyxy"])
+            distance = float(np.hypot(subject_center[0] - object_center[0], subject_center[1] - object_center[1]))
+            predicate, confidence = _spatial_predicate(subject["xyxy"], obj["xyxy"])
+            relation_candidates.append(
+                (
+                    distance,
+                    subject_index,
+                    {
+                        "subject": subject_index,
+                        "predicate": predicate,
+                        "object": object_index,
+                        "confidence": confidence,
+                    },
+                )
+            )
+    relation_candidates.sort(key=lambda item: item[0])
+    used_subjects: set[int] = set()
+    for _, subject_index, payload in relation_candidates:
+        if len(relations) >= max_relations:
+            break
+        if subject_index in used_subjects:
+            continue
+        used_subjects.add(subject_index)
+        relations.append(payload)
+
+    qa_pairs: List[Dict[str, object]] = []
+    if regions:
+        anchor = regions[0]
+        qa_pairs.append(
+            {
+                "question": f"is there {anchor['label']}?",
+                "answer": "yes",
+                "answer_type": "boolean",
+            }
+        )
+    if relations:
+        primary_relation = relations[0]
+        first = regions[int(primary_relation["subject"])]
+        second = regions[int(primary_relation["object"])]
+        predicate = str(primary_relation["predicate"])
+        predicate_text = relation_question_prefix.get(predicate, predicate.replace("_", " "))
+        qa_pairs.append(
+            {
+                "question": f"is {first['label']} {predicate_text} {second['label']}?",
+                "answer": "yes",
+                "answer_type": "grounded_reasoning",
+            }
+        )
+        qa_pairs.append(
+            {
+                "question": f"what is {predicate_text} {second['label']}?",
+                "answer": str(first["label"]),
+                "answer_type": "relation",
+            }
+        )
+        if include_relation_predicate_qa:
+            qa_pairs.append(
+                {
+                    "question": f"what relation links {first['label']} and {second['label']}?",
+                    "answer": predicate,
+                    "answer_type": "relation_predicate",
+                }
+            )
+
+    metadata = {
+        "mask_path": str(mask_path),
+        "weak_mask_supervision": bool(boxes),
+        "mask_region_count": len(boxes),
+        "mask_relation_count": len(relations),
+        "mask_relation_predicates": sorted({str(relation["predicate"]) for relation in relations}),
+        "mask_component_supervision": True,
+        "mask_region_labeling": "component_rank",
+        "mask_background_value": background_value,
+    }
+    return boxes, relations, qa_pairs, metadata
+
+
 def prepare_real_scene_dataset(
     source_root: str | Path,
     destination_root: str | Path,
@@ -1026,76 +1532,29 @@ def prepare_real_scene_dataset(
                 if copy_files:
                     shutil.copy2(image_path, target_path)
                 else:
-                    if target_path.exists():
-                        target_path.unlink()
-                    os_link_supported = hasattr(target_path, "hardlink_to")
-                    if os_link_supported:
-                        target_path.hardlink_to(image_path)
-                    else:
+                    if not target_path.exists():
+                        os_link_supported = hasattr(target_path, "hardlink_to")
+                        if os_link_supported:
+                            try:
+                                target_path.hardlink_to(image_path)
+                            except OSError:
+                                shutil.copy2(image_path, target_path)
+                        else:
+                            shutil.copy2(image_path, target_path)
+                    elif target_path.stat().st_size <= 0:
                         shutil.copy2(image_path, target_path)
-                source_rel_key = _normalize_image_key(image_path.relative_to(source_root_path))
-                source_parent_rel_key = (
-                    _normalize_image_key(image_path.relative_to(source_root_path.parent))
-                    if source_root_path.parent in image_path.parents
-                    else ""
+                annotation = _lookup_annotation_record(
+                    image_path,
+                    source_root_path=source_root_path,
+                    annotation_records=annotation_records,
                 )
-                source_abs_key = _normalize_image_key(image_path)
-                source_name_key = _normalize_image_key(image_path.name)
-                annotation = (
-                    annotation_records.get(source_rel_key)
-                    or annotation_records.get(source_parent_rel_key)
-                    or annotation_records.get(source_abs_key)
-                    or annotation_records.get(source_name_key)
+                boxes, relations, qa_pairs, metadata = _serialize_annotation_payload(
+                    annotation,
+                    scene_name=scene_name,
+                    image_path=image_path,
+                    source_split=split_name,
+                    include_classification_qa=include_classification_qa,
                 )
-                metadata = {
-                    "synthetic": False,
-                    "source_path": str(image_path),
-                    "source_scene_name": scene_name,
-                }
-                if annotation is not None:
-                    metadata.update(annotation.metadata)
-                qa_pairs = []
-                boxes = []
-                relations = []
-                if annotation is not None:
-                    boxes = [
-                        {
-                            "label": box.label,
-                            "xyxy": list(box.xyxy),
-                            "attributes": list(box.attributes),
-                        }
-                        for box in annotation.boxes
-                    ]
-                    relations = [
-                        {
-                            "subject": relation.subject,
-                            "predicate": relation.predicate,
-                            "object": relation.object,
-                            "confidence": relation.confidence,
-                        }
-                        for relation in annotation.relations
-                    ]
-                    qa_pairs.extend(
-                        {
-                            "question": qa.question,
-                            "answer": qa.answer,
-                            "answer_type": qa.answer_type,
-                        }
-                        for qa in annotation.qa_pairs
-                    )
-                if include_classification_qa:
-                    has_scene_question = any(
-                        str(qa.get("question", "")).strip().lower() == "what scene is shown?"
-                        for qa in qa_pairs
-                    )
-                    if not has_scene_question:
-                        qa_pairs.append(
-                            {
-                                "question": "what scene is shown?",
-                                "answer": scene_name,
-                                "answer_type": "classification",
-                            }
-                        )
                 annotation_rows.append(
                     {
                         "split": split_name,
@@ -1123,5 +1582,152 @@ def prepare_real_scene_dataset(
         "copy_files": bool(copy_files),
         "include_classification_qa": bool(include_classification_qa),
         "split_counts": split_counts,
+        "annotation_manifests": manifest_paths,
+    }
+
+
+def prepare_real_scene_dataset_from_scene_roots(
+    scene_roots: Mapping[str, str | Path],
+    destination_root: str | Path,
+    *,
+    source_annotation_manifests: Mapping[str, str | Path] | None = None,
+    split_names: Sequence[str] = ("train", "val", "test"),
+    copy_files: bool = True,
+    include_classification_qa: bool = True,
+    include_relation_predicate_qa: bool = False,
+    allowed_extensions: Sequence[str] | None = None,
+) -> Dict[str, object]:
+    destination_root_path = Path(destination_root).resolve()
+    destination_root_path.mkdir(parents=True, exist_ok=True)
+    extensions = tuple(allowed_extensions or SBVisualDatasetConfig().allowed_extensions)
+
+    normalized_scene_roots = {
+        str(scene_name): Path(scene_root).resolve()
+        for scene_name, scene_root in scene_roots.items()
+    }
+    normalized_annotation_manifests = {
+        str(scene_name): Path(manifest_path).resolve()
+        for scene_name, manifest_path in dict(source_annotation_manifests or {}).items()
+    }
+    annotation_records_by_scene = {
+        scene_name: load_visual_annotation_manifest(
+            normalized_annotation_manifests[scene_name],
+            dataset_root=scene_root,
+        )
+        if scene_name in normalized_annotation_manifests
+        else {}
+        for scene_name, scene_root in normalized_scene_roots.items()
+    }
+
+    split_counts: Dict[str, Dict[str, int]] = {split_name: {} for split_name in split_names}
+    manifest_paths: Dict[str, str] = {}
+    split_sources: Dict[str, Dict[str, str]] = {split_name: {} for split_name in split_names}
+    split_mask_sources: Dict[str, Dict[str, str]] = {split_name: {} for split_name in split_names}
+
+    scene_split_images: Dict[str, Dict[str, List[Path]]] = {}
+    scene_split_masks: Dict[str, Dict[str, Path | None]] = {}
+    for scene_name, scene_root in normalized_scene_roots.items():
+        discovered_images, discovered_sources = _find_scene_split_images(
+            scene_root,
+            scene_name=scene_name,
+            split_names=split_names,
+            allowed_extensions=extensions,
+        )
+        scene_split_images[scene_name] = discovered_images
+        scene_split_masks[scene_name] = {}
+        for split_name, source_dir in discovered_sources.items():
+            split_sources.setdefault(split_name, {})[scene_name] = source_dir
+            split_dir = _discover_scene_split_dir(scene_root, scene_name, split_name)
+            mask_dir = _discover_split_mask_dir(split_dir) if split_dir is not None else None
+            scene_split_masks[scene_name][split_name] = mask_dir
+            if mask_dir is not None:
+                split_mask_sources.setdefault(split_name, {})[scene_name] = str(mask_dir)
+
+    for split_name in split_names:
+        split_dir = destination_root_path / split_name
+        split_dir.mkdir(parents=True, exist_ok=True)
+        annotation_rows: List[Dict[str, object]] = []
+        for scene_name, scene_root in normalized_scene_roots.items():
+            images = list(scene_split_images.get(scene_name, {}).get(split_name, ()))
+            split_counts.setdefault(split_name, {})[scene_name] = len(images)
+            if not images:
+                continue
+            scene_dir = split_dir / scene_name
+            scene_dir.mkdir(parents=True, exist_ok=True)
+            annotation_records = annotation_records_by_scene.get(scene_name, {})
+            mask_dir = scene_split_masks.get(scene_name, {}).get(split_name)
+            for index, image_path in enumerate(images):
+                target_path = scene_dir / f"{scene_name}_{index:04d}{image_path.suffix.lower()}"
+                if copy_files:
+                    shutil.copy2(image_path, target_path)
+                else:
+                    if not target_path.exists():
+                        os_link_supported = hasattr(target_path, "hardlink_to")
+                        if os_link_supported:
+                            try:
+                                target_path.hardlink_to(image_path)
+                            except OSError:
+                                shutil.copy2(image_path, target_path)
+                        else:
+                            shutil.copy2(image_path, target_path)
+                    elif target_path.stat().st_size <= 0:
+                        shutil.copy2(image_path, target_path)
+                annotation = _lookup_annotation_record(
+                    image_path,
+                    source_root_path=scene_root,
+                    annotation_records=annotation_records,
+                )
+                boxes, relations, qa_pairs, metadata = _serialize_annotation_payload(
+                    annotation,
+                    scene_name=scene_name,
+                    image_path=image_path,
+                    source_split=split_name,
+                    include_classification_qa=include_classification_qa,
+                )
+                if annotation is None:
+                    mask_path = _find_mask_path_for_image(image_path, mask_dir)
+                    if mask_path is not None:
+                        mask_boxes, mask_relations, mask_qa_pairs, mask_metadata = _derive_mask_annotations(
+                            mask_path,
+                            include_relation_predicate_qa=include_relation_predicate_qa,
+                        )
+                        if mask_boxes:
+                            boxes = mask_boxes
+                            relations = mask_relations
+                            qa_pairs = list(mask_qa_pairs) + list(qa_pairs)
+                        metadata.update(mask_metadata)
+                annotation_rows.append(
+                    {
+                        "split": split_name,
+                        "image_rel_path": str(target_path.relative_to(destination_root_path).as_posix()),
+                        "scene_name": scene_name,
+                        "boxes": boxes,
+                        "relations": relations,
+                        "qa_pairs": qa_pairs,
+                        "metadata": metadata,
+                    }
+                )
+        if annotation_rows:
+            manifest_path = destination_root_path / f"{split_name}_annotations.jsonl"
+            with manifest_path.open("w", encoding="utf-8") as handle:
+                for row in annotation_rows:
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            manifest_paths[split_name] = str(manifest_path)
+
+    return {
+        "scene_roots": {scene_name: str(path) for scene_name, path in normalized_scene_roots.items()},
+        "destination_root": str(destination_root_path),
+        "scene_names": list(normalized_scene_roots.keys()),
+        "source_annotation_manifests": {
+            scene_name: str(path)
+            for scene_name, path in normalized_annotation_manifests.items()
+        },
+        "split_names": list(split_names),
+        "copy_files": bool(copy_files),
+        "include_classification_qa": bool(include_classification_qa),
+        "include_relation_predicate_qa": bool(include_relation_predicate_qa),
+        "split_counts": split_counts,
+        "split_sources": split_sources,
+        "split_mask_sources": split_mask_sources,
         "annotation_manifests": manifest_paths,
     }

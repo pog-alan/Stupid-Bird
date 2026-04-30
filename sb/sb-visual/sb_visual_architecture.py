@@ -378,9 +378,22 @@ class SceneGraphHead(nn.Module):
         self.box_regressor = nn.Linear(config.state_dim, 4)
         self.relationness = nn.Linear(config.state_dim, 1)
         self.relation_predicate = nn.Linear(config.state_dim, config.relation_vocab_size)
+        self.pair_relation_mlp = nn.Sequential(
+            nn.Linear(config.state_dim * 4 + 2, config.state_dim),
+            nn.GELU(),
+            nn.Linear(config.state_dim, config.state_dim),
+        )
+        self.pair_relationness = nn.Linear(config.state_dim, 1)
+        self.pair_relation_predicate = nn.Linear(config.state_dim, config.relation_vocab_size)
         self.answer_head = nn.Linear(config.state_dim, config.answer_vocab_size)
 
-    def forward(self, fused_state: Tensor, relation_state: Tensor, scene_state: Tensor) -> Dict[str, Tensor]:
+    def forward(
+        self,
+        fused_state: Tensor,
+        relation_state: Tensor,
+        scene_state: Tensor,
+        positions: Tensor,
+    ) -> Dict[str, Tensor]:
         pooled = fused_state.mean(dim=1)
         relation_pooled = relation_state.mean(dim=1)
         scene_logits = self.scene_classifier(scene_state + pooled)
@@ -388,6 +401,25 @@ class SceneGraphHead(nn.Module):
         box_deltas = torch.sigmoid(self.box_regressor(fused_state))
         relation_scores = self.relationness(relation_state).squeeze(-1)
         relation_predicate_logits = self.relation_predicate(relation_state)
+        subject_visual = fused_state.unsqueeze(2).expand(-1, -1, fused_state.shape[1], -1)
+        object_visual = fused_state.unsqueeze(1).expand(-1, fused_state.shape[1], -1, -1)
+        subject_relation = relation_state.unsqueeze(2).expand_as(subject_visual)
+        object_relation = relation_state.unsqueeze(1).expand_as(object_visual)
+        relative_position = positions.unsqueeze(1) - positions.unsqueeze(2)
+        pair_state = self.pair_relation_mlp(
+            torch.cat(
+                [
+                    subject_visual,
+                    object_visual,
+                    subject_relation,
+                    object_relation,
+                    relative_position,
+                ],
+                dim=-1,
+            )
+        )
+        pair_relation_scores = self.pair_relationness(pair_state).squeeze(-1)
+        pair_relation_predicate_logits = self.pair_relation_predicate(pair_state)
         answer_logits = self.answer_head(scene_state + 0.5 * pooled + 0.5 * relation_pooled)
         return {
             "scene_logits": scene_logits,
@@ -395,6 +427,8 @@ class SceneGraphHead(nn.Module):
             "box_deltas": box_deltas,
             "relation_scores": relation_scores,
             "relation_predicate_logits": relation_predicate_logits,
+            "pair_relation_scores": pair_relation_scores,
+            "pair_relation_predicate_logits": pair_relation_predicate_logits,
             "answer_logits": answer_logits,
         }
 
@@ -477,7 +511,7 @@ class SBVisualCore(nn.Module):
                 dim=-1,
             )
         )
-        heads = self.task_head(visual_state, relation_pack["relation_state"], scene_state)
+        heads = self.task_head(visual_state, relation_pack["relation_state"], scene_state, patch_batch.positions)
 
         aux = {
             "patch_count_mean": float(visual_state.shape[1]),
@@ -493,6 +527,8 @@ class SBVisualCore(nn.Module):
             "box_deltas": heads["box_deltas"],
             "relation_scores": heads["relation_scores"],
             "relation_predicate_logits": heads["relation_predicate_logits"],
+            "pair_relation_scores": heads["pair_relation_scores"],
+            "pair_relation_predicate_logits": heads["pair_relation_predicate_logits"],
             "answer_logits": heads["answer_logits"],
             "patch_positions": patch_batch.positions,
             "schema_weights": abstraction["schema_weights"],
