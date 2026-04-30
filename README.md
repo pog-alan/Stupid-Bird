@@ -113,6 +113,260 @@ python -m examples.v02_state_cache_smoke
 
 这条路线的目标不是把 `KV cache` 移植进 SB，而是形成 SB 自己的 `state cache`：把已经完成的存储融合结果作为下一段计算的起点，从而让长上下文更像“持续记忆推进”，而不是重复扫描历史 token。
 
+## 机器情绪监督设计
+
+SB 的“机器情绪”不是主观体验，而是一组可解释、可记录、可训练的监督信号。它把当前解释状态中的置信度、候选竞争、新颖性、风险、冲突和运行压力压缩成反馈向量，并作为训练、推理、预测三条链路的共同监督。
+
+当前反馈向量包括：
+
+- `confidence`：证据是否充分，控制回答直接程度和自动提交程度
+- `curiosity`：是否存在新概念或缺失证据，控制主动探索和观察缓存
+- `caution`：是否存在冲突、风险或低置信度，控制自动学习降权
+- `urgency`：是否存在风险场景，控制风险解释优先级
+- `fatigue`：是否接近运行预算或记忆压力上限，控制摘要合并与遗忘
+- `satisfaction`：解释是否完整且稳定，控制是否收束
+- `confusion`：候选竞争和证据缺口是否过高，控制澄清提问
+- `risk`：污染、泄漏、翻倒、异常等风险线索强度
+
+反馈结果会进一步生成动作建议：
+
+- `ask_clarifying_question`
+- `expand_observation_buffer`
+- `lower_auto_learning`
+- `prioritize_risk_response`
+- `summarize_and_forget`
+- `answer_directly`
+
+作为监督时，它有三种作用：
+
+- 训练监督：把 `emotion_vector`、动作选择、风险判断和置信度校准加入辅助损失
+- 推理监督：把 `confidence / curiosity / caution / fatigue` 转成记忆写入、replay、提问、摘要和遗忘门控
+- 预测监督：训练模型预测下一步 `confusion / risk / confidence` 的变化，让系统提前判断自己会不会误解或进入高风险状态
+
+形式化训练目标：
+
+```text
+L =
+  L_task
+  + lambda_emo L_emotion_vector
+  + lambda_act L_action_policy
+  + lambda_next L_next_emotion
+  + lambda_risk L_risk_prediction
+  + lambda_cal L_confidence_calibration
+```
+
+其中：
+
+- `L_emotion_vector` 监督当前情绪向量
+- `L_action_policy` 监督应该提问、召回、写入、摘要、遗忘还是直接回答
+- `L_next_emotion` 监督下一步困惑、风险、好奇和信心变化
+- `L_risk_prediction` 监督风险判断
+- `L_confidence_calibration` 约束置信度接近真实任务成功率
+
+关键文件：
+
+- `sb/emotion_feedback.py`
+  机器情绪反馈向量、动作建议、监督目标、推理门控和损失规格
+- `examples/v02_emotion_feedback_smoke.py`
+  最小验证：输入一个异常积水场景，输出反馈向量、监督目标和损失规格
+
+最小验证命令：
+
+```powershell
+python -m examples.v02_emotion_feedback_smoke
+```
+
+## ACMM：情绪门控因果记忆模型
+
+`ACMM` 全称为 `Affective-Causal Memory Model`，中文可称为“情绪门控因果记忆模型”。它不是模拟人类情绪，而是把情绪定义成一组可计算的监督变量，用来收窄学习空间、调度记忆写入、触发复核、更新因果规则和提高风险预测能力。
+
+### 完整数学对象规格
+
+ACMM 的所有环节已经统一成一份形式化数学对象规格，覆盖：
+
+- 输入与观测空间
+- 对象化与关系图
+- 世界状态编码
+- 因果图与预测
+- 分层记忆
+- 情绪监督向量
+- 情绪门控
+- 动作与复核策略
+- 训练目标与参数更新
+- 真实语料标注与 A/B 验证
+
+关键文件：
+
+- `sb/acmm_formal.py`
+  ACMM 的集合、对象、映射、指标、不变量和验收标准
+- `examples/v02_acmm_formal_spec.py`
+  导出 JSON 或 Markdown 形式的数学规格
+
+导出 JSON：
+
+```powershell
+python -m examples.v02_acmm_formal_spec --format json
+```
+
+导出 Markdown：
+
+```powershell
+python -m examples.v02_acmm_formal_spec --format markdown --output-path data/processed/experiments/acmm_formal_spec.md
+```
+
+核心循环：
+
+```text
+x_t -> O_t -> z_t -> G_t -> e_t -> M_{t+1}
+```
+
+其中：
+
+- `x_t` 是输入，可以来自文本、图像、遥感影像或传感器
+- `O_t` 是对象集合
+- `z_t` 是对象、属性、关系构成的世界状态
+- `G_t` 是因果图或先验机制图
+- `e_t` 是情绪监督向量
+- `M_t` 是分层记忆系统
+
+ACMM 情绪向量采用七维定义：
+
+```text
+e_t = [Surprise, Uncertainty, Novelty, Risk, Value, Conflict, Curiosity]
+```
+
+工程含义：
+
+- `Surprise`：当前状态与预测状态的差距
+- `Uncertainty`：输出分布熵
+- `Novelty`：当前状态与已有记忆的距离
+- `Risk`：错判代价或风险强度
+- `Value`：样本对任务目标的重要性
+- `Conflict`：与因果图或规则库的冲突
+- `Curiosity`：信息增益潜力
+
+门控结果：
+
+- `write_memory`：是否写入长期记忆
+- `update_model`：是否提高该样本训练权重
+- `request_review`：是否请求人工复核
+- `update_rule`：是否更新因果或规则记忆
+- `trigger_alert`：是否触发风险预警
+
+分层记忆：
+
+- `episodic`：具体案例
+- `semantic`：稳定概念
+- `causal`：状态转移经验
+- `rule`：可解释规则
+- `counterexample`：反例、误判、冲突和异常
+
+关键文件：
+
+- `sb/acmm.py`
+  ACMM 的对象状态、因果图、七维情绪向量、门控函数、分层记忆和 cognitive step
+- `examples/v02_acmm_smoke.py`
+  最小验证：输入一个遥感/场景异常样例，输出情绪监督、门控决策、记忆写入和动作计划
+
+最小验证命令：
+
+```powershell
+python -m examples.v02_acmm_smoke
+```
+
+可行性验证命令：
+
+```powershell
+python -m examples.v02_acmm_validation
+```
+
+验证内容包括：
+
+- 机制单元验证：预测错误时 `Surprise` 上升，高风险/冲突样本的 `request_review` 上升，记忆写入后重复样本的 `Novelty` 下降
+- 合成对照验证：在固定复核预算下，用 ACMM 门控挑选复核样本，并与同预算随机挑样比较错误捕获率、高风险捕获率和复核精度
+
+当前验证边界：
+
+- 这只能证明 ACMM 的数学—计算闭环按预期运行
+- 这能初步证明 ACMM 在合成任务上比随机复核更集中抓住高风险/错误样本
+- 这还不能证明 ACMM 在真实遥感、文本或图像任务上一定带来稳定性能收益
+- 下一步必须接真实数据 A/B：无 ACMM、仅记忆、记忆+因果、记忆+因果+情绪监督
+
+### 接入 Chinese-C4 真实中文语料
+
+ACMM 已接入 `chinese-c4` 的真实中文文本样本，用于做弱监督门控验证。接入方式不是把原文直接当人工标注数据，而是先用文本信号规则把真实语料转成对象、状态、关系、风险和任务价值，再让 ACMM 计算七维情绪监督和复核门控。
+
+关键文件：
+
+- `sb/acmm_text.py`
+  Chinese-C4 文本到 ACMM observation 的弱监督适配层
+- `examples/v02_acmm_chinese_c4_eval.py`
+  在真实 Chinese-C4 样本上统计 ACMM 是否能富集弱高风险文本
+
+准备样本：
+
+```powershell
+python -m examples.v02_prepare_chinese_c4 --max-rows 1000 --max-shards 1 --min-chars 80
+```
+
+运行评测：
+
+```powershell
+python -m examples.v02_acmm_chinese_c4_eval --limit 300
+```
+
+建立人工标注集：
+
+```powershell
+python -m examples.v02_acmm_chinese_c4_label_tool --limit 120
+```
+
+进入交互标注：
+
+```powershell
+python -m examples.v02_acmm_chinese_c4_label_tool --interactive --limit 120
+```
+
+标签约定：
+
+- `0`：普通文本
+- `1`：弱风险线索
+- `2`：高风险/需复核
+- `u`：不确定
+
+用人工标签做 A/B：
+
+```powershell
+python -m examples.v02_acmm_chinese_c4_ab_eval
+```
+
+如果只是 smoke，没有人工标签，可以显式使用弱标签：
+
+```powershell
+python -m examples.v02_acmm_chinese_c4_ab_eval --allow-weak-labels
+```
+
+A/B 对照包含：
+
+- `baseline`：关键词/弱规则风险分数
+- `memory`：无因果图的记忆新颖度排序
+- `causal`：因果/风险门控但不累积长期记忆
+- `acmm`：记忆 + 因果 + 情绪门控
+
+当前 Chinese-C4 评测边界：
+
+- 这是 `weak-supervision`，弱标签来自关键词、因果先验和风险规则，不是人工真值
+- 指标衡量的是 ACMM 门控能否在真实中文文本中富集弱高风险样本
+- 它不能单独证明下游任务准确率提升，后续仍需人工标注或真实任务标签做 A/B
+
+ACMM 对应的参数更新思想：
+
+```text
+theta_{t+1} = theta_t - eta * g(e_t) * grad_theta L
+```
+
+也就是：不是所有样本平等影响模型，而是由情绪监督决定这个样本值得学多少、记多少、是否复核、是否进入规则或反例记忆。
+
 ## SB-Core 当前收窄目标：非 attention 长程召回网络
 
 为了让实验线更可验证，`SB-Core` 的近期目标暂时不再表述为“完整替代 Transformer”，而是收窄为：

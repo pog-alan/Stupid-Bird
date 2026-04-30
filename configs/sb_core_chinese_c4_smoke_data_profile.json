@@ -1,0 +1,12 @@
+{
+  "profile_name": "sb_core_chinese_c4_smoke",
+  "output_dir": "data/processed/text_corpus_chinese_c4_smoke",
+  "wikipedia_limit": 200,
+  "clue_limit_per_subset": 64,
+  "longbench_limit_per_task": 16,
+  "max_vocab_size": 2048,
+  "min_freq": 2,
+  "tokenizer_kind": "subword",
+  "validation_ratio": 0.05,
+  "seed": 23
+}
