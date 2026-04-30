@@ -31,7 +31,14 @@ from .ingest import Ingestor, KnowledgeStore, apply_stable_entries_to_config
 from .llm_bridge import build_llm_context, retrieve_for_llm
 from .llm_client import LLMConfig, OpenAICompatibleLLMClient, create_llm_client, load_llm_config
 from .llm_runtime import SBLLMRuntime, SBLLMRuntimeConfig
-from .core_lm import SBCoreConfig, SBCoreModelSpec
+from .core_lm import (
+    CORE_OBJECTIVE_NON_ATTENTION_RECALL,
+    DEFAULT_RECALL_BANKS,
+    SBCoreConfig,
+    SBCoreModelSpec,
+    SBRecallBankSpec,
+    SBRecallMathSpec,
+)
 from .eval_long_context import (
     LongContextEvaluationSuite,
     LongContextMeasurement,
@@ -120,9 +127,11 @@ except ModuleNotFoundError as exc:
 
 __all__ = [
     "CandidateDecision",
+    "CORE_OBJECTIVE_NON_ATTENTION_RECALL",
     "CrawlSource",
     "Crawler",
     "CrawlerConfig",
+    "DEFAULT_RECALL_BANKS",
     "CurriculumStage",
     "DialogStore",
     "DEFAULT_TASKS",
@@ -171,6 +180,8 @@ __all__ = [
     "SBLLMRuntimeConfig",
     "SBCoreConfig",
     "SBCoreModelSpec",
+    "SBRecallBankSpec",
+    "SBRecallMathSpec",
     "SBCoreTrainingPlan",
     "SBRAGConfig",
     "SBRAGPipeline",
@@ -208,13 +219,23 @@ __all__ = [
 
 if _TORCH_AVAILABLE:
     from .signal_schema import DynamicSchemaConfig, DynamicSchemaOperator
+    from .state_cache import (
+        SBCachedState,
+        SBCoreStateCache,
+        SBStateCacheConfig,
+        SBStateCacheForwardResult,
+    )
     __all__.extend(
         [
             "DynamicSchemaConfig",
             "DynamicSchemaOperator",
+            "SBCachedState",
             "SBCoreMiniLM",
             "SBCoreMemoryState",
             "SBCoreMiniTorchConfig",
+            "SBCoreStateCache",
+            "SBStateCacheConfig",
+            "SBStateCacheForwardResult",
             "SBRuntimeGates",
             "TinyTransformerConfig",
             "TinyTransformerLM",

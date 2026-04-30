@@ -243,6 +243,10 @@ def _format_wikipedia(row: Dict[str, object]) -> str:
     return f"title: {row.get('title', '')}\ntext: {row.get('text', '')}"
 
 
+def _format_chinese_c4(row: Dict[str, object]) -> str:
+    return str(row.get("text", ""))
+
+
 def load_longbench_rows(
     manifest_path: str | Path,
     *,
@@ -284,11 +288,19 @@ def build_stage_texts(
     structured_texts: List[str] = []
     long_context_texts: List[str] = []
 
-    wikipedia_path = Path(datasets["wikipedia_zh_sample"]["path"])
-    for row in _read_jsonl(wikipedia_path, limit=wikipedia_limit):
-        text = _normalize_text(_format_wikipedia(row))
-        if len(text) >= 40:
-            foundation_texts.append(text)
+    if "wikipedia_zh_sample" in datasets:
+        wikipedia_path = Path(datasets["wikipedia_zh_sample"]["path"])
+        for row in _read_jsonl(wikipedia_path, limit=wikipedia_limit):
+            text = _normalize_text(_format_wikipedia(row))
+            if len(text) >= 40:
+                foundation_texts.append(text)
+
+    if "chinese_c4_sample" in datasets:
+        chinese_c4_path = Path(datasets["chinese_c4_sample"]["path"])
+        for row in _read_jsonl(chinese_c4_path, limit=wikipedia_limit):
+            text = _normalize_text(_format_chinese_c4(row))
+            if len(text) >= 40:
+                foundation_texts.append(text)
 
     clue_entry = datasets["clue"]
     clue_formatters = {
